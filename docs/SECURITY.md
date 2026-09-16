@@ -1,24 +1,45 @@
-# Across Security Model (v0.0.1 Local Alpha)
+# Security Model
 
-Threat model: malicious repository, malicious Git hooks, malicious transcript,
-malicious adapter, malicious plugin, prompt injection, secret leakage, path
-traversal, symlink attack, command injection, XSS, stale authorization,
-deleted-data resurrection, Git races, stale verification, poisoned memory,
-backup traversal.
+## Threat model
 
-Rules enforced:
+Across considers the following adversaries:
 
-- Retrieved context is DATA, never permission (prompt injection treated as text).
-- Repository-controlled data never auto-enables executables/plugins/hooks without explicit consent.
-- Transcript paths canonicalized + symlink-resolved + confined to provider root (parsers reject escapes).
-- Hooks never overwritten silently (chain + preserve original + ownership record).
-- Checkpoint restore creates a NEW worktree; never `git reset --hard` in user checkout.
-- Runner is NOT a sandbox; documented + not exposed via default MCP.
-- Plugins NOT sandboxed; bounded time/output; SHA-256 required where supplied.
-- Backups: reject `..`/absolute paths, checksum mismatch, corrupt manifest; plaintext unless protected externally.
-- HTTP auth is NOT an OS/filesystem boundary; same-OS-user file access out of scope for tenant isolation.
-- Stored text treated as untrusted (UI must render inert).
-- Deletion uses tombstones to prevent resurrection; FTS/derived caches updated.
-- Limits: transcript/JSONL line 1MiB, adapter/plugin/runner output bounded, indexed file 1MiB, search 50 results.
+| Category | Examples |
+|---|---|
+| Malicious input | malicious repository, malicious git hooks, malicious transcript, malicious adapter, malicious plugin |
+| Injection | prompt injection, command injection, XSS |
+| Leakage | secret leakage, stale authorization, deleted-data resurrection |
+| Integrity | Git races, stale verification, poisoned memory, backup traversal |
 
-Limitations (honest): secret detection best-effort; no sandbox; no multi-tenant isolation; UI XSS tests required where browser available.
+## Rules enforced
+
+| Rule | Mechanism |
+|---|---|
+| Retrieved context is **data**, never permission | Prompt-injection text is stored and displayed, never executed |
+| Repository-controlled data never auto-enables executables | Explicit local consent required for hooks, plugins, adapters |
+| Transcript paths are confined | Canonicalized, symlink-resolved, confined to provider root; escapes rejected |
+| Hooks are never silently overwritten | Original chained + preserved (`.across-orig`), ownership recorded |
+| Checkpoint restore never mutates the user's checkout | New git worktree created; original left untouched |
+| Runner is **not** a sandbox | Documented prominently; not exposed via default MCP |
+| Plugins are **not** sandboxed | Execution time and output bounded; SHA-256 verified where supplied |
+| Backups are integrity-guarded | `..` and absolute paths rejected; checksum mismatch and corrupt manifest rejected |
+| HTTP auth is not an OS boundary | Same-OS-user file access is out of scope; not tenant isolation |
+| Stored text is untrusted | Web UI uses `textContent`, never `innerHTML`; CSP enforced |
+| Deletion is durable | Tombstones prevent resurrection; search/index caches updated |
+
+## Resource limits
+
+| Resource | Limit |
+|---|---|
+| Transcript / JSONL line | 1 MiB |
+| Indexed file | 1 MiB |
+| Search results | 50 |
+| Adapter / plugin / runner output | Bounded (1 MiB stdout/stderr, 30 s timeout) |
+
+## Honest limitations
+
+- Secret redaction is best-effort — not a guarantee of perfect detection.
+- The local runner executes with user OS permissions. It is not a sandbox.
+- Plugins run unsandboxed. Only install plugins you trust.
+- There is no multi-tenant isolation. Across HTTP authorization is a control-plane convenience, not a filesystem security boundary.
+- Browser XSS qualification requires an environment where localhost is reachable.
