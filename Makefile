@@ -1,4 +1,7 @@
-.PHONY: build test test-race vet e2e fuzz check install-local uninstall-local
+.PHONY: build test test-race vet e2e fuzz fmt clean check install-local uninstall-local
+
+fmt:
+	gofmt -w .
 
 build:
 	go build -o bin/across ./cmd/across
@@ -26,6 +29,9 @@ e2e:
 
 fuzz:
 	go test -fuzz=FuzzAcrossJSONL -fuzztime=15s ./internal/event/ || true
+
+clean:
+	rm -rf bin/
 
 check: vet test-race
 
