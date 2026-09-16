@@ -1,4 +1,39 @@
+# Binaries
 bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Database
 *.db
-*.db-*
+*.db-wal
+*.db-shm
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+
+# Go
+vendor/
+go-build/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Across local data
+.across/
+across.db
+
+# Temp
+tmp/
+*.tmp
