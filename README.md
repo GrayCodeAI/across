@@ -6,8 +6,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/GrayCodeAI/across/workflows/CI/badge.svg)](https://github.com/GrayCodeAI/across/actions)
-[![Version](https://img.shields.io/badge/version-0.0.1--alpha-orange)]()
-[![Status](https://img.shields.io/badge/status-local%20-alpha-red)]()
+[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/GrayCodeAI/across/releases/tag/v0.0.1)
+[![Status](https://img.shields.io/badge/status-0.0.1-blue)]()
 
 </div>
 
