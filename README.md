@@ -346,14 +346,18 @@ Qualification: `UNIMPLEMENTED` · `SYNTHETIC_TESTED` · `LIVE_TESTED` · `LIVE_Q
 
 ```bash
 make build          # Build all binaries to bin/
-make test           # Unit tests
+make test           # All tests, including E2E
+make test-e2e       # End-to-end tests only (alias: make e2e)
 make test-race      # Race detector
-make e2e            # End-to-end tests
 make vet            # go vet
-make check          # vet + test-race
+make check          # gofmt check + vet + test-race
+make cross-check    # Windows compile-only check (CGO disabled)
+make vulncheck      # govulncheck at the pinned version
 make install-local  # Copy binaries to ~/.local/bin/
 make uninstall-local
 ```
+
+Requires Go 1.26.6 or newer (see `go.mod`), `git`, and a C compiler for cgo (the SQLite driver).
 
 ### Contributing
 

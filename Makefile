@@ -1,7 +1,12 @@
-.PHONY: build test test-race vet e2e fuzz fmt clean check install-local uninstall-local
+.PHONY: build test test-e2e test-race vet e2e fuzz fmt fmt-check coverage cross-check vulncheck clean check install-local uninstall-local
+
+GOVULNCHECK_VERSION ?= v1.8.0
 
 fmt:
 	gofmt -w .
+
+fmt-check:
+	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "gofmt required for:"; echo "$$unformatted"; exit 1; fi
 
 build:
 	go build -o bin/across ./cmd/across
@@ -18,22 +23,34 @@ build:
 test:
 	go test -count=1 ./...
 
+test-e2e:
+	go test -count=1 -run E2E ./...
+
 test-race:
 	go test -race -count=1 ./...
 
 vet:
 	go vet ./...
 
-e2e:
-	go test -count=1 -run E2E ./...
+e2e: test-e2e
 
 fuzz:
-	go test -fuzz=FuzzAcrossJSONL -fuzztime=15s ./internal/event/ || true
+	go test -fuzz=FuzzAcrossJSONL -fuzztime=15s ./internal/event/
+
+coverage:
+	go test -count=1 -coverprofile=coverage.out ./...
+
+cross-check:
+	GOOS=windows GOARCH=amd64 go vet ./...
+	GOOS=windows GOARCH=amd64 go build ./...
+
+vulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 clean:
 	rm -rf bin/
 
-check: vet test-race
+check: fmt-check vet test-race
 
 install-local:
 	mkdir -p $(HOME)/.local/bin
