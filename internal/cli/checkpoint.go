@@ -19,18 +19,9 @@ func queryCheckpoints(db *sql.DB, repoID string) (*sql.Rows, error) {
 }
 
 func insertCheckpointMutation(tx sqlRunner, id, repoID, revision, sessionID, createdAt, message, basis, agent, nativeSessionID, activityKind, activitySummary string) error {
-	cursor := 0
-	if sessionID != "" {
-		if err := tx.QueryRow(`SELECT event_cursor FROM sessions WHERE id=?`, sessionID).Scan(&cursor); err != nil {
-			if err == sql.ErrNoRows {
-				return notFound("session %q not found", sessionID)
-			}
-			return err
-		}
-	}
 	contentHash := digestBytes([]byte(fmt.Sprintf("%s|%s|%s|%s|%s", repoID, revision, sessionID, message, basis)))
-	if _, err := tx.Exec(`INSERT INTO checkpoints(id, repository_id, revision, session_id, created_at, message, basis, agent, native_session_id, bundle_version, context_manifest_id, event_cursor, content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, repoID, revision, sessionID, createdAt, message, basis, agent, nativeSessionID, 1, "", cursor, contentHash); err != nil {
+	if _, err := tx.Exec(`INSERT INTO checkpoints(id, repository_id, revision, session_id, created_at, message, basis, agent, native_session_id, bundle_version, context_manifest_id, content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, repoID, revision, sessionID, createdAt, message, basis, agent, nativeSessionID, 1, "", contentHash); err != nil {
 		return err
 	}
 	if sessionID != "" {

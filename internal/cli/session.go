@@ -56,8 +56,8 @@ func newSessionCmd() *cobra.Command {
 						return err
 					}
 				}
-				if _, err := tx.Exec(`INSERT INTO sessions(id, repository_id, agent, native_session_id, state, started_at, last_event_at, parent_session_id, fork_type, event_cursor, provider, lineage_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-					id, repoID, agent, native, "active", now, now, "", "root", 0, agent, 1); err != nil {
+				if _, err := tx.Exec(`INSERT INTO sessions(id, repository_id, agent, native_session_id, state, started_at, last_event_at, parent_session_id, fork_type, provider, lineage_version) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+					id, repoID, agent, native, "active", now, now, "", "root", agent, 1); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(`INSERT INTO sources(id, repository_id, kind, origin, native_id, session_id, captured_at, revision, revision_basis, parser_version, redaction_status, import_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -90,8 +90,8 @@ func newSessionCmd() *cobra.Command {
 			id := store.NewID("sess")
 			now := store.NowUTC()
 			if err := withTx(db, func(tx sqlRunner) error {
-				if _, err := tx.Exec(`INSERT INTO sessions(id, repository_id, agent, native_session_id, state, started_at, last_event_at, parent_session_id, fork_type, event_cursor, provider, lineage_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-					id, repoID, agent, native, "active", now, now, parent.id, "fork", 0, agent, 2); err != nil {
+				if _, err := tx.Exec(`INSERT INTO sessions(id, repository_id, agent, native_session_id, state, started_at, last_event_at, parent_session_id, fork_type, provider, lineage_version) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+					id, repoID, agent, native, "active", now, now, parent.id, "fork", agent, 2); err != nil {
 					return err
 				}
 				return logActivityTx(tx, "session.fork", repoID, id, "forked from "+parent.id)
@@ -146,11 +146,11 @@ func newSessionCmd() *cobra.Command {
 			}
 			defer db.Close()
 			var id, rp, ag, nat, st, sa, ea, le, lcp, parent, fork, provider string
-			var cursor, lineage int
-			if err := db.QueryRow(`SELECT id, repository_id, agent, native_session_id, state, started_at, ended_at, last_event_at, latest_checkpoint_id, parent_session_id, fork_type, event_cursor, provider, lineage_version FROM sessions WHERE id=?`, args[0]).Scan(&id, &rp, &ag, &nat, &st, &sa, &ea, &le, &lcp, &parent, &fork, &cursor, &provider, &lineage); err != nil {
+			var lineage int
+			if err := db.QueryRow(`SELECT id, repository_id, agent, native_session_id, state, started_at, ended_at, last_event_at, latest_checkpoint_id, parent_session_id, fork_type, provider, lineage_version FROM sessions WHERE id=?`, args[0]).Scan(&id, &rp, &ag, &nat, &st, &sa, &ea, &le, &lcp, &parent, &fork, &provider, &lineage); err != nil {
 				return notFound("session %q not found", args[0])
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "id: %s\nrepo: %s\nagent: %s\nnative: %s\nstate: %s\nstarted: %s\nended: %s\nlast_event: %s\nlatest_checkpoint: %s\nparent: %s\nfork_type: %s\nevent_cursor: %d\nprovider: %s\nlineage_version: %d\n", id, rp, ag, nat, st, sa, ea, le, lcp, parent, fork, cursor, provider, lineage)
+			fmt.Fprintf(cmd.OutOrStdout(), "id: %s\nrepo: %s\nagent: %s\nnative: %s\nstate: %s\nstarted: %s\nended: %s\nlast_event: %s\nlatest_checkpoint: %s\nparent: %s\nfork_type: %s\nprovider: %s\nlineage_version: %d\n", id, rp, ag, nat, st, sa, ea, le, lcp, parent, fork, provider, lineage)
 			return nil
 		}},
 		&cobra.Command{Use: "close ID", Args: cobra.ExactArgs(1), Short: "Close session", RunE: func(cmd *cobra.Command, args []string) error {

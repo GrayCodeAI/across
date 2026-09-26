@@ -19,7 +19,7 @@ func newCheckpointBundleCmd() *cobra.Command {
 		defer db.Close()
 		var bundle CheckpointBundle
 		var checkpointContentHash string
-		if err := db.QueryRow(`SELECT repository_id, revision, session_id, event_cursor, content_hash FROM checkpoints WHERE id=?`, args[0]).Scan(&bundle.Repository, &bundle.Revision, &bundle.Session, &bundle.EventCursor, &checkpointContentHash); err != nil {
+		if err := db.QueryRow(`SELECT repository_id, revision, session_id, content_hash FROM checkpoints WHERE id=?`, args[0]).Scan(&bundle.Repository, &bundle.Revision, &bundle.Session, &checkpointContentHash); err != nil {
 			if err == sql.ErrNoRows {
 				return notFound("checkpoint %q not found", args[0])
 			}

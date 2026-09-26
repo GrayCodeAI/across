@@ -404,12 +404,10 @@ ALTER TABLE source_events ADD COLUMN parser_version TEXT NOT NULL DEFAULT 'legac
 ALTER TABLE source_events ADD COLUMN redaction_status TEXT NOT NULL DEFAULT 'unknown';
 ALTER TABLE sessions ADD COLUMN parent_session_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN fork_type TEXT NOT NULL DEFAULT 'root';
-ALTER TABLE sessions ADD COLUMN event_cursor INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN lineage_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE checkpoints ADD COLUMN bundle_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE checkpoints ADD COLUMN context_manifest_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE checkpoints ADD COLUMN event_cursor INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE checkpoints ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS context_manifests (
   id TEXT PRIMARY KEY,
@@ -460,12 +458,6 @@ CREATE TABLE IF NOT EXISTS evidence_bundles (
   schema_version INTEGER NOT NULL DEFAULT 1,
   payload TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS idempotency_keys (
-  key TEXT PRIMARY KEY,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_context_manifests_repo_created ON context_manifests(repository_id, created_at);

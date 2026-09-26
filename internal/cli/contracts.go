@@ -42,7 +42,6 @@ type CheckpointBundle struct {
 	Repository    string              `json:"repository"`
 	Revision      string              `json:"revision"`
 	Session       string              `json:"session,omitempty"`
-	EventCursor   int                 `json:"event_cursor"`
 	ContentHash   string              `json:"content_hash,omitempty"`
 	Evidence      []EvidenceReference `json:"evidence"`
 	Unknowns      []string            `json:"unknowns"`
