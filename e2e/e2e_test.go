@@ -229,6 +229,46 @@ func TestE2E_ProtectedBranch(t *testing.T) {
 	}
 }
 
+func TestE2E_ProtectedBranchChainsOriginalPreReceive(t *testing.T) {
+	bin := buildAcross(t)
+	home := filepath.Join(t.TempDir(), "home")
+	hostedID := run(t, home, bin, "repo", "create", "chained")
+	hooksDir := filepath.Join(home, "repositories", "chained.git", "hooks")
+	received := filepath.Join(t.TempDir(), "original-pre-receive")
+	original := "#!/bin/sh\ncat >> '" + received + "'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(original), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = run(t, home, bin, "branch-rule", "add", "--repo", hostedID, "--pattern", "main")
+	if _, err := os.Stat(filepath.Join(hooksDir, "pre-receive.across-orig")); err != nil {
+		t.Fatalf("original pre-receive not preserved: %v", err)
+	}
+	clone := filepath.Join(t.TempDir(), "c")
+	if out, err := exec.Command(bin, "--home", home, "repo", "clone", hostedID, clone).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v %s", err, out)
+	}
+	git(t, clone, "config", "user.email", "t@t.t")
+	git(t, clone, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(clone, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, clone, "add", ".")
+	git(t, clone, "commit", "-m", "init")
+	git(t, clone, "branch", "-M", "feature")
+	git(t, clone, "push", "origin", "feature")
+	data, err := os.ReadFile(received)
+	if err != nil || !strings.Contains(string(data), "refs/heads/feature") {
+		t.Fatalf("original pre-receive did not run with the pushed refs: %q %v", data, err)
+	}
+	if out, err := exec.Command("git", "-C", clone, "push", "origin", "feature:main").CombinedOutput(); err == nil {
+		t.Fatalf("direct push to protected main should fail: %s", out)
+	}
+	data, err = os.ReadFile(received)
+	if err != nil || !strings.Contains(string(data), "refs/heads/main") {
+		t.Fatalf("original pre-receive did not see the rejected push: %q %v", data, err)
+	}
+}
+
 func TestE2E_SessionRefreshSupersession(t *testing.T) {
 	bin := buildAcross(t)
 	home := t.TempDir() + "/home"

@@ -10,7 +10,10 @@ import (
 	"github.com/graycodeai/across/internal/config"
 )
 
-const acrossHookMarker = "# across-managed-hook: v1"
+const (
+	acrossHookMarker     = "# across-managed-hook: v1"
+	acrossOriginalMarker = "# across-original-hook"
+)
 
 func InstallHook(hooksDir, name, content string) error {
 	directory, err := validateHookDirectory(hooksDir)
@@ -177,7 +180,7 @@ func isManagedHook(content, originalPath string, originalExists bool) bool {
 }
 
 func installWithOriginal(hookPath, originalPath, content string) error {
-	temporary, err := stageHookFile(hookPath, managedHookContent(content, originalPath, true))
+	temporary, err := stageHookFile(hookPath, managedHookContent(filepath.Base(hookPath), content, originalPath, true))
 	if err != nil {
 		return err
 	}
@@ -195,7 +198,7 @@ func installWithOriginal(hookPath, originalPath, content string) error {
 }
 
 func replaceManagedHook(hookPath, originalPath, content string, originalExists bool) error {
-	temporary, err := stageHookFile(hookPath, managedHookContent(content, originalPath, originalExists))
+	temporary, err := stageHookFile(hookPath, managedHookContent(filepath.Base(hookPath), content, originalPath, originalExists))
 	if err != nil {
 		return err
 	}
@@ -271,16 +274,51 @@ func unusedHookPath(directory, name string) (string, error) {
 	return path, nil
 }
 
-func managedHookContent(content, originalPath string, originalExists bool) string {
-	body := addHookMarker(content)
-	if !strings.HasSuffix(body, "\n") {
-		body += "\n"
+func managedHookContent(name, content, originalPath string, originalExists bool) string {
+	if !originalExists {
+		body := addHookMarker(content)
+		if !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+		return body
 	}
-	if originalExists {
-		body += "# across-original-hook\n"
-		body += "if [ -x " + shellQuote(originalPath) + " ]; then exec " + shellQuote(originalPath) + " \"$@\"; fi\n"
+	across := strings.TrimSuffix(withoutShebang(content), "\n")
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString(acrossHookMarker + "\n")
+	b.WriteString(acrossOriginalMarker + "\n")
+	b.WriteString("across_original=" + shellQuote(originalPath) + "\n")
+	if hookReadsStdin(name) {
+		b.WriteString("across_stdin=\"$(mktemp \"${TMPDIR:-/tmp}/across-hook.XXXXXX\")\" || exit 1\n")
+		b.WriteString("trap 'rm -f \"$across_stdin\"' EXIT\n")
+		b.WriteString("cat > \"$across_stdin\" || exit 1\n")
+		b.WriteString("if [ -x \"$across_original\" ]; then\n  \"$across_original\" \"$@\" < \"$across_stdin\" || exit $?\nfi\n")
+		b.WriteString("(\n" + across + "\n) < \"$across_stdin\"\n")
+		return b.String()
 	}
-	return body
+	b.WriteString("(\n" + across + "\n)\n")
+	b.WriteString("across_status=$?\n")
+	b.WriteString("if [ -x \"$across_original\" ]; then\n  \"$across_original\" \"$@\" || exit $?\nfi\n")
+	b.WriteString("exit \"$across_status\"\n")
+	return b.String()
+}
+
+func hookReadsStdin(name string) bool {
+	switch name {
+	case "pre-receive", "post-receive", "pre-push", "post-rewrite", "reference-transaction", "proc-receive":
+		return true
+	}
+	return false
+}
+
+func withoutShebang(content string) string {
+	if !strings.HasPrefix(content, "#!") {
+		return content
+	}
+	if index := strings.IndexByte(content, '\n'); index >= 0 {
+		return content[index+1:]
+	}
+	return ""
 }
 
 func addHookMarker(content string) string {
