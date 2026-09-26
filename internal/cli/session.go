@@ -344,19 +344,19 @@ func importTranscriptWithSessionAt(cmd *cobra.Command, repoID, kind, file, forma
 	if err != nil {
 		return err
 	}
-	confinementPath := file
+	origin := file
 	if originPath != "" {
-		confinementPath = originPath
+		origin = originPath
 	}
-	if !pathWithin(canon, confinementPath) {
-		return invalidArgument("transcript path must be within the repository root")
+	if !pathWithin(canon, origin) {
+		return invalidArgument("transcript path must be within the repository root (%s); copy the export into the working tree, e.g. an untracked or ignored directory", canon)
 	}
 	if sessionID != "" {
 		if _, err := sessionMustBelong(db, repoID, sessionID, true); err != nil {
 			return err
 		}
 	}
-	if err := rejectTombstonedSource(db, repoID, kind, file, nativeID); err != nil {
+	if err := rejectTombstonedSource(db, repoID, kind, origin, nativeID); err != nil {
 		return err
 	}
 	deduped, combined, rawLines, err := parseTranscript(cmd, f, format)
@@ -372,11 +372,11 @@ func importTranscriptWithSessionAt(cmd *cobra.Command, repoID, kind, file, forma
 	}
 	seq := len(deduped)
 	if err := withTx(db, func(tx sqlRunner) error {
-		if err := rejectTombstonedSource(tx, repoID, kind, file, nativeID); err != nil {
+		if err := rejectTombstonedSource(tx, repoID, kind, origin, nativeID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`INSERT INTO sources(id, repository_id, kind, origin, native_id, session_id, captured_at, revision, revision_basis, content_hash, size_bytes, parser_version, redaction_status, import_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			src, repoID, kind, file, nativeID, sessionID, now, head, basis, sourceHash, sourceSize, parserVersion, "best_effort_redacted", "complete"); err != nil {
+			src, repoID, kind, origin, nativeID, sessionID, now, head, basis, sourceHash, sourceSize, parserVersion, "best_effort_redacted", "complete"); err != nil {
 			return err
 		}
 		for i, p := range deduped {

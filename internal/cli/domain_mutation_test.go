@@ -303,6 +303,35 @@ func TestTombstonedSourceRequiresNewIdentity(t *testing.T) {
 	}
 }
 
+func TestImportSessionRecordsCallerPathAsOrigin(t *testing.T) {
+	home, repoID, work := newDomainRepo(t)
+	session, err := runMutationCLI(home, "session", "start", "--repo", repoID, "--agent", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := writeRepoTranscript(t, work, "export.jsonl", `{"type":"UserPrompt","text":"hello"}`)
+	output, err := runMutationCLI(home, "agent", "import-session", "--agent", "across", "--repo", repoID, "--session", strings.TrimSpace(session), "--file", transcript)
+	if err != nil {
+		t.Fatalf("import-session: output=%q err=%v", output, err)
+	}
+	expected, err := filepath.EvalSymlinks(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var origin string
+	if err := db.QueryRow(`SELECT origin FROM sources WHERE id=?`, strings.TrimSpace(output)).Scan(&origin); err != nil {
+		t.Fatal(err)
+	}
+	if origin != expected {
+		t.Fatalf("source origin %q, want the caller's export %q", origin, expected)
+	}
+}
+
 // writeRepoTranscript stages a transcript inside the repository working tree.
 // importTranscript confines transcript paths to the repository root, so tests
 // cannot stage them in an unrelated t.TempDir() — doing so makes every import

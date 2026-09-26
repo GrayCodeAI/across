@@ -99,10 +99,6 @@ func newAgentCmd() *cobra.Command {
 			if err := os.WriteFile(staged, raw, 0o600); err != nil {
 				return err
 			}
-			// Confine against the caller's resolved path, not the staged copy:
-			// the transcript is re-homed into a temp dir above, which is never
-			// inside the repository root. Passing the staged path made every
-			// import-session call fail the repository-root confinement check.
 			return importTranscriptWithSessionAt(cmd, repoID, "transcript", staged, format, sess, sess, resolved)
 		}},
 	)
