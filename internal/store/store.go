@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/graycodeai/across/internal/config"
 	_ "github.com/mattn/go-sqlite3"
@@ -17,17 +19,39 @@ func Open(home string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+	if err := execOpenPragma(db, `PRAGMA foreign_keys=ON`); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("open database: enable foreign keys: %w", err)
 	}
-	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+	if err := execOpenPragma(db, `PRAGMA busy_timeout=5000`); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("open database: set busy timeout: %w", err)
 	}
 	if err := Migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return db, nil
+}
+
+func execOpenPragma(db *sql.DB, query string) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := db.Exec(query); err == nil {
+			return nil
+		} else if !isSQLiteLockError(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func isSQLiteLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "database schema is locked")
 }
