@@ -18,23 +18,60 @@ func DefaultHome() string {
 	return filepath.Join(home, ".local", "share", "across")
 }
 
+var managedHomeDirectories = []string{"repositories", "mirrors", "workspaces", "plugins", "backups", "tmp", "logs"}
+
 func EnsureHome(home string) error {
 	if strings.TrimSpace(home) == "" {
 		return fmt.Errorf("home path must not be empty")
 	}
-	abs, err := filepath.Abs(home)
+	root, err := ResolveUserPath(home)
 	if err != nil {
 		return err
 	}
-	if err := EnsureDirectory(abs); err != nil {
+	if err := EnsureDirectory(root); err != nil {
 		return err
 	}
-	for _, sub := range []string{"repositories", "mirrors", "workspaces", "plugins", "backups", "tmp", "logs"} {
-		if err := EnsureDirectory(filepath.Join(abs, sub)); err != nil {
+	for _, sub := range managedHomeDirectories {
+		if err := EnsureDirectory(filepath.Join(root, sub)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func ResolveUserPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path must not be empty")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	existing := filepath.Clean(abs)
+	missing := make([]string, 0)
+	for {
+		_, err := os.Lstat(existing)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", fmt.Errorf("cannot find an existing parent of %s", path)
+		}
+		missing = append(missing, filepath.Base(existing))
+		existing = parent
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", existing, err)
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		resolved = filepath.Join(resolved, missing[i])
+	}
+	return resolved, nil
 }
 
 func EnsureDirectory(path string) error {
