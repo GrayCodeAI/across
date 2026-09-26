@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,7 +17,7 @@ import (
 func newVerifyCmd() *cobra.Command {
 	c := &cobra.Command{Use: "verify", Short: "Verification evidence"}
 	c.AddCommand(
-		&cobra.Command{Use: "add --repo ID --name N [--revision R] [--exit-code C]", Short: "Record claim (STATED, not executed)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "add --repo ID --name N [--revision R] [--exit-code C]", Short: "Record claim (STATED, not executed)", PreRunE: requiredFlags("repo", "name"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			name, _ := cmd.Flags().GetString("name")
 			rev, _ := cmd.Flags().GetString("revision")
@@ -36,7 +37,7 @@ func newVerifyCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), id+" (basis=user_recorded: agent/user claim, NOT Across-executed)")
 			return nil
 		}},
-		&cobra.Command{Use: "run --repo ID --name N -- CMD...", Short: "Execute verification locally (NOT sandboxed)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "run --repo ID --name N -- CMD...", Args: cobra.ArbitraryArgs, Short: "Execute verification locally (NOT sandboxed)", PreRunE: requiredFlags("repo", "name"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			name, _ := cmd.Flags().GetString("name")
 			argv := args
@@ -45,7 +46,7 @@ func newVerifyCmd() *cobra.Command {
 				argv = args[i:]
 			}
 			if len(argv) == 0 {
-				return fmt.Errorf("no command after --")
+				return invalidArgument("no command after --")
 			}
 			db, _, err := openDB()
 			if err != nil {
@@ -58,14 +59,15 @@ func newVerifyCmd() *cobra.Command {
 			}
 			before := git.Head(canon)
 			start := store.NowUTC()
-			t0 := time.Now()
 			var so, se bytes.Buffer
-			ec := exec.Command(argv[0], argv[1:]...)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ec := exec.CommandContext(ctx, argv[0], argv[1:]...)
 			ec.Dir = canon
 			ec.Env = os.Environ()
-			ec.Stdout = &so
-			ec.Stderr = &se
+			ec.Stdout = &limitedWriter{W: &so, N: 1 << 20}
+			ec.Stderr = &limitedWriter{W: &se, N: 1 << 20}
 			err2 := ec.Run()
+			cancel()
 			exit := 0
 			if err2 != nil {
 				if ee, ok := err2.(*exec.ExitError); ok {
@@ -74,7 +76,6 @@ func newVerifyCmd() *cobra.Command {
 					exit = 1
 				}
 			}
-			_ = t0
 			after := git.Head(canon)
 			id := store.NewID("ver")
 			stdout := bound(so.String(), 4096)
@@ -90,6 +91,9 @@ func newVerifyCmd() *cobra.Command {
 			}
 			indexDoc(db, "verification", id, repoID, name, stdout)
 			fmt.Fprintf(cmd.OutOrStdout(), "%s exit=%d basis=executed_by_across_local_runner%s\n", id, exit, note)
+			if err2 != nil {
+				return operationFailed("verification command failed with exit %d", exit)
+			}
 			return nil
 		}},
 		&cobra.Command{Use: "list [--repo ID]", Short: "List verifications", RunE: func(cmd *cobra.Command, args []string) error {

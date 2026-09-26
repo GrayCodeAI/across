@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/graycodeai/across/internal/adapter"
 	"github.com/spf13/cobra"
 )
 
-// §27 safe adapter discovery: scan absolute PATH dirs for across-agent-*, do not execute to list.
 func newAgentCmd() *cobra.Command {
-	c := &cobra.Command{Use: "agent", Short: "Agent adapters"}
+	c := &cobra.Command{Use: "agent", Short: "Agent protocol shells"}
 	c.AddCommand(
-		&cobra.Command{Use: "list", Short: "List adapters (no execution)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "list", Args: cobra.NoArgs, Short: "List adapters (no execution)", RunE: func(cmd *cobra.Command, args []string) error {
 			found := map[string]string{}
 			for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 				if !filepath.IsAbs(dir) {
@@ -35,55 +35,57 @@ func newAgentCmd() *cobra.Command {
 			for _, n := range []string{"claude-code", "codex", "cursor", "gemini", "opencode", "qwen", "factory-droid", "amp", "goose"} {
 				key := "across-agent-" + n
 				if p, ok := found[key]; ok {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", strings.TrimPrefix(key, "across-agent-"), p)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", n, p)
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "%s\t(not installed)\n", n)
 				}
 			}
 			return nil
 		}},
-		&cobra.Command{Use: "info NAME", Args: cobra.ExactArgs(1), Short: "Adapter capabilities (may execute chosen adapter)", RunE: func(cmd *cobra.Command, args []string) error {
-			// explicit execution allowed here
+		&cobra.Command{Use: "info NAME", Args: cobra.ExactArgs(1), Short: "Query adapter capabilities", RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			bin, err := lookupAdapter(name)
 			if err != nil {
-				// honest fallback: static capability table
-				return printStaticCaps(cmd, name)
+				return err
 			}
 			out, err := runBounded(bin, []string{"capabilities"})
 			if err != nil {
-				return printStaticCaps(cmd, name)
+				return fmt.Errorf("query adapter %q: %w", name, err)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), out)
-			return nil
+			var caps adapter.Capabilities
+			if err := json.Unmarshal([]byte(out), &caps); err != nil {
+				return fmt.Errorf("decode adapter %q capabilities: %w", name, err)
+			}
+			if caps.Name != name {
+				return fmt.Errorf("adapter identity mismatch: requested %q, received %q", name, caps.Name)
+			}
+			if caps.Protocol != adapter.Protocol {
+				return fmt.Errorf("unsupported adapter protocol %q", caps.Protocol)
+			}
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(caps)
 		}},
-		&cobra.Command{Use: "import-session --agent NAME --repo ID --session SID [--file F]", Short: "Import native session (bounded, deletes raw)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "import-session --agent NAME --repo ID --session SID --file FILE", Args: cobra.NoArgs, Short: "Import a supported session export", PreRunE: requiredFlags("agent", "repo", "session", "file"), RunE: func(cmd *cobra.Command, args []string) error {
 			agent, _ := cmd.Flags().GetString("agent")
 			repoID, _ := cmd.Flags().GetString("repo")
 			sess, _ := cmd.Flags().GetString("session")
 			file, _ := cmd.Flags().GetString("file")
-			if file == "" {
-				return fmt.Errorf("--file required in v0.0.1 (provider export to file, then import)")
-			}
-			// §31 transcript security: canonicalize + symlink-resolve + confine.
-			// For explicit user-supplied --file, require it to exist and be a
-			// regular file under either CWD or the repo path; reject escapes.
-			abs, err := filepath.Abs(file)
+			format, err := agentToFormat(agent)
 			if err != nil {
 				return err
 			}
-			resolved, err := filepath.EvalSymlinks(abs)
+			resolved, err := requireExistingFile(file)
 			if err != nil {
-				return fmt.Errorf("cannot resolve transcript path: %w", err)
+				return err
 			}
 			fi, err := os.Stat(resolved)
-			if err != nil || fi.IsDir() {
-				return fmt.Errorf("transcript must be a regular file")
+			if err != nil {
+				return err
 			}
 			if fi.Size() > 32<<20 {
 				return fmt.Errorf("transcript exceeds 32MiB import bound")
 			}
-			// Copy to private tmp dir, parse immediately, delete raw (§32).
 			tmp, err := os.MkdirTemp("", "across-import-*")
 			if err != nil {
 				return err
@@ -97,52 +99,49 @@ func newAgentCmd() *cobra.Command {
 			if err := os.WriteFile(staged, raw, 0o600); err != nil {
 				return err
 			}
-			format := agentToFormat(agent)
-			if err := importTranscriptWithSession(cmd, repoID, "transcript", staged, format, sess, sess); err != nil {
-				return err
-			}
-			// raw file deleted via tmp cleanup; only safe projection retained.
-			return nil
+			// Confine against the caller's resolved path, not the staged copy:
+			// the transcript is re-homed into a temp dir above, which is never
+			// inside the repository root. Passing the staged path made every
+			// import-session call fail the repository-root confinement check.
+			return importTranscriptWithSessionAt(cmd, repoID, "transcript", staged, format, sess, sess, resolved)
 		}},
 	)
-	c.PersistentFlags().String("agent", "", "agent name")
+	c.PersistentFlags().String("agent", "", "agent or export format")
 	c.PersistentFlags().String("repo", "", "repository id")
 	c.PersistentFlags().String("session", "", "session id (used as native_id for supersession)")
 	c.PersistentFlags().String("file", "", "provider export file")
 	return c
 }
 
-func agentToFormat(agent string) string {
-	switch strings.ToLower(agent) {
+func agentToFormat(agent string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(agent)) {
+	case "across":
+		return "across", nil
 	case "claude-code", "claude", "cursor":
-		return "claude"
+		return "claude", nil
 	case "codex":
-		return "codex"
+		return "codex", nil
 	case "gemini":
-		return "gemini"
+		return "gemini", nil
 	case "opencode":
-		return "opencode"
+		return "opencode", nil
 	default:
-		return "across"
+		return "", invalidArgument("unsupported import format %q", agent)
 	}
 }
 
 func lookupAdapter(name string) (string, error) {
+	if !adapter.IsKnownProvider(name) {
+		return "", invalidArgument("unknown adapter %q", name)
+	}
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
 		p := filepath.Join(dir, "across-agent-"+name)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("not found")
-}
-
-func printStaticCaps(cmd *cobra.Command, name string) error {
-	caps := map[string]any{"name": name, "protocol": "version 1", "capture_events": true, "install_hooks": true, "native_resume": true, "session_export": false, "token_usage": true, "subagents": false, "review": false, "qualification": "UNIMPLEMENTED (see docs/agent-compatibility.md)"}
-	b, _ := json.MarshalIndent(caps, "", "  ")
-	fmt.Fprintln(cmd.OutOrStdout(), string(b))
-	return nil
+	return "", notFound("adapter %q is not installed", name)
 }

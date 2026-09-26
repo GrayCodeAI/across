@@ -12,7 +12,7 @@ import (
 func newIssueCmd() *cobra.Command {
 	c := &cobra.Command{Use: "issue", Short: "Local issues"}
 	c.AddCommand(
-		&cobra.Command{Use: "create --repo ID --title T [--body B]", Short: "Create issue", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "create --repo ID --title T [--body B]", Short: "Create issue", PreRunE: requiredFlags("repo", "title"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			title, _ := cmd.Flags().GetString("title")
 			body, _ := cmd.Flags().GetString("body")
@@ -74,14 +74,16 @@ func newIssueCmd() *cobra.Command {
 			}
 			return nil
 		}},
-		&cobra.Command{Use: "comment ID --body B", Args: cobra.ExactArgs(1), Short: "Comment", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "comment ID --body B", Args: cobra.ExactArgs(1), Short: "Comment", PreRunE: requiredFlags("body"), RunE: func(cmd *cobra.Command, args []string) error {
 			body, _ := cmd.Flags().GetString("body")
 			db, _, err := openDB()
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`INSERT INTO issue_comments(id, issue_id, body, created_at) VALUES(?,?,?,?)`, store.NewID("cmt"), args[0], body, store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO issue_comments(id, issue_id, body, created_at) VALUES(?,?,?,?)`, store.NewID("cmt"), args[0], body, store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "commented")
 			return nil
 		}},
@@ -91,7 +93,17 @@ func newIssueCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`UPDATE issues SET state='closed', closed_at=? WHERE id=?`, store.NowUTC(), args[0])
+			result, err := db.Exec(`UPDATE issues SET state='closed', closed_at=? WHERE id=? AND state!='closed'`, store.NowUTC(), args[0])
+			if err != nil {
+				return err
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if affected == 0 {
+				return conflict("issue %q is missing or already closed", args[0])
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "closed")
 			return nil
 		}},
@@ -105,7 +117,7 @@ func newIssueCmd() *cobra.Command {
 func newChangeCmd() *cobra.Command {
 	c := &cobra.Command{Use: "change", Short: "Local PR-like changes"}
 	c.AddCommand(
-		&cobra.Command{Use: "create --repo ID --title T [--base B] [--head H]", Short: "Create change", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "create --repo ID --title T [--base B] [--head H]", Short: "Create change", PreRunE: requiredFlags("repo", "title"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			title, _ := cmd.Flags().GetString("title")
 			base, _ := cmd.Flags().GetString("base")
@@ -169,7 +181,9 @@ func newChangeCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`INSERT INTO change_approvals(id, change_id, principal, decision, created_at) VALUES(?,?,?,?,?)`, store.NewID("appr"), args[0], by, "approve", store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO change_approvals(id, change_id, principal, decision, created_at) VALUES(?,?,?,?,?)`, store.NewID("appr"), args[0], by, "approve", store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "approved")
 			return nil
 		}},
@@ -180,7 +194,9 @@ func newChangeCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`INSERT INTO change_approvals(id, change_id, principal, decision, created_at) VALUES(?,?,?,?,?)`, store.NewID("appr"), args[0], by, "request-changes", store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO change_approvals(id, change_id, principal, decision, created_at) VALUES(?,?,?,?,?)`, store.NewID("appr"), args[0], by, "request-changes", store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "changes requested")
 			return nil
 		}},
@@ -196,7 +212,16 @@ func newChangeCmd() *cobra.Command {
 
 func newBranchRuleCmd() *cobra.Command {
 	c := &cobra.Command{Use: "branch-rule", Short: "Branch protection rules"}
-	c.AddCommand(&cobra.Command{Use: "add --repo ID --pattern P [--min-approvals N] [--required-verifications a,b]", Short: "Add rule", RunE: func(cmd *cobra.Command, args []string) error {
+	c.AddCommand(&cobra.Command{Use: "add --repo ID --pattern P [--min-approvals N] [--required-verifications a,b]", Short: "Add rule", PreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := requiredFlags("repo")(cmd, args); err != nil {
+			return err
+		}
+		min, _ := cmd.Flags().GetInt("min-approvals")
+		if min < 0 {
+			return invalidArgument("--min-approvals must be at least 0")
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
 		repoID, _ := cmd.Flags().GetString("repo")
 		pat, _ := cmd.Flags().GetString("pattern")
 		min, _ := cmd.Flags().GetInt("min-approvals")
@@ -245,7 +270,9 @@ func newQueueCmd() *cobra.Command {
 			}
 			defer db.Close()
 			id := store.NewID("mq")
-			_, _ = db.Exec(`INSERT INTO merge_queue(id, change_id, state, created_at) VALUES(?,?,?,?)`, id, args[0], "queued", store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO merge_queue(id, change_id, state, created_at) VALUES(?,?,?,?)`, id, args[0], "queued", store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), id)
 			return nil
 		}},

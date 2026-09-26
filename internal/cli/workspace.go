@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/graycodeai/across/internal/git"
 	"github.com/graycodeai/across/internal/store"
@@ -12,7 +13,7 @@ import (
 func newWorkspaceCmd() *cobra.Command {
 	c := &cobra.Command{Use: "workspace", Short: "Git worktree workspaces"}
 	c.AddCommand(
-		&cobra.Command{Use: "create --repo ID --revision REV", Short: "Create workspace", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "create --repo ID [--revision REV] [--branch BRANCH]", Short: "Create workspace", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			rev, _ := cmd.Flags().GetString("revision")
 			branch, _ := cmd.Flags().GetString("branch")
@@ -102,6 +103,9 @@ func newVersionSetCmd() *cobra.Command {
 	c := &cobra.Command{Use: "version-set", Short: "Cross-repo version sets"}
 	c.AddCommand(
 		&cobra.Command{Use: "create NAME", Args: cobra.ExactArgs(1), Short: "Create version set", RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(args[0]) == "" {
+				return invalidArgument("version set name must not be empty")
+			}
 			db, _, err := openDB()
 			if err != nil {
 				return err
@@ -133,10 +137,16 @@ func newVersionSetCmd() *cobra.Command {
 					break
 				}
 			}
-			if at < 0 {
-				return fmt.Errorf("want REPO@REV")
+			if at <= 0 || at == len(s)-1 {
+				return invalidArgument("entry must be REPO@REV with non-empty components")
 			}
-			_, _ = db.Exec(`INSERT OR REPLACE INTO version_set_entries(version_set_id, repository_id, revision) VALUES(?,?,?)`, vsid, s[:at], s[at+1:])
+			repoID, revision := s[:at], s[at+1:]
+			if _, _, err := repoMustExist(db, repoID); err != nil {
+				return err
+			}
+			if _, err := db.Exec(`INSERT OR REPLACE INTO version_set_entries(version_set_id, repository_id, revision) VALUES(?,?,?)`, vsid, repoID, revision); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "added")
 			return nil
 		}},
