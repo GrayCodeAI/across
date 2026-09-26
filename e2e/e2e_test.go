@@ -630,6 +630,14 @@ func TestE2E_HookChaining(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatal("original chained hook did not run")
 	}
+	_ = run(t, home, bin, "hook", "uninstall", work)
+	restored, err := os.ReadFile(filepath.Join(hooksDir, "post-commit"))
+	if err != nil || string(restored) != "#!/bin/sh\ntouch "+marker+"\n" {
+		t.Fatalf("uninstall did not restore the original hook: %q %v", restored, err)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "post-commit.across-orig")); !os.IsNotExist(err) {
+		t.Fatalf("original sidecar remains after uninstall: %v", err)
+	}
 }
 
 func TestE2E_GitHTTPClone(t *testing.T) {

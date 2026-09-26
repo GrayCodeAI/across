@@ -232,63 +232,6 @@ func memoryMustExist(q rowQuerier, id string) (memoryInfo, error) {
 	}, nil
 }
 
-func issueMustBelong(q rowQuerier, repoID, issueID string) error {
-	if issueID == "" {
-		return nil
-	}
-	var repositoryID sql.NullString
-	err := q.QueryRow(`SELECT repository_id FROM issues WHERE id=?`, issueID).Scan(&repositoryID)
-	if err == sql.ErrNoRows {
-		return notFound("issue %q not found", issueID)
-	}
-	if err != nil {
-		return operationFailed("query issue %q: %v", issueID, err)
-	}
-	if !repositoryID.Valid || repositoryID.String == "" {
-		return conflict("issue %q has no repository", issueID)
-	}
-	if repositoryID.String != repoID {
-		return conflict("issue %q belongs to repository %q", issueID, repositoryID.String)
-	}
-	return nil
-}
-
-func changeMustBelong(q rowQuerier, repoID, changeID string) error {
-	if changeID == "" {
-		return nil
-	}
-	var repositoryID sql.NullString
-	err := q.QueryRow(`SELECT repository_id FROM changes WHERE id=?`, changeID).Scan(&repositoryID)
-	if err == sql.ErrNoRows {
-		return notFound("change %q not found", changeID)
-	}
-	if err != nil {
-		return operationFailed("query change %q: %v", changeID, err)
-	}
-	if !repositoryID.Valid || repositoryID.String == "" {
-		return conflict("change %q has no repository", changeID)
-	}
-	if repositoryID.String != repoID {
-		return conflict("change %q belongs to repository %q", changeID, repositoryID.String)
-	}
-	return nil
-}
-
-func principalMustExist(q rowQuerier, principalID string) error {
-	if principalID == "" {
-		return nil
-	}
-	var exists int
-	err := q.QueryRow(`SELECT 1 FROM principals WHERE id=?`, principalID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return notFound("principal %q not found", principalID)
-	}
-	if err != nil {
-		return operationFailed("query principal %q: %v", principalID, err)
-	}
-	return nil
-}
-
 func AddCommands(root *cobra.Command) {
 	root.AddCommand(
 		newVersionCmd(),

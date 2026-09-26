@@ -90,20 +90,10 @@ func newHookCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			repoPath := args[0]
-			abs, err := requireExistingDirectory(repoPath)
+			hooksDir, err := repositoryHooksDir(args[0])
 			if err != nil {
 				return err
 			}
-			common := git.CommonDir(abs)
-			if common == "" {
-				return fmt.Errorf("not a git repository: %s", abs)
-			}
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(abs, common)
-			}
-			// safety: refuse if the resolved hooks dir escapes the repo (symlink §96)
-			hooksDir := filepath.Join(common, "hooks")
 			if err := git.InstallHook(hooksDir, "post-commit", postCommitHookScript(homeDir)); err != nil {
 				return err
 			}
@@ -111,7 +101,38 @@ func newHookCmd() *cobra.Command {
 			return nil
 		},
 	})
+	c.AddCommand(&cobra.Command{
+		Use:   "uninstall REPO_PATH",
+		Args:  cobra.ExactArgs(1),
+		Short: "Remove the Across post-commit hook and restore a chained original",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hooksDir, err := repositoryHooksDir(args[0])
+			if err != nil {
+				return err
+			}
+			if err := git.UninstallHook(hooksDir, "post-commit"); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "post-commit hook uninstalled (chained original restored if present)")
+			return nil
+		},
+	})
 	return c
+}
+
+func repositoryHooksDir(repoPath string) (string, error) {
+	abs, err := requireExistingDirectory(repoPath)
+	if err != nil {
+		return "", err
+	}
+	common := git.CommonDir(abs)
+	if common == "" {
+		return "", invalidArgument("not a git repository: %s", abs)
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(abs, common)
+	}
+	return filepath.Join(common, "hooks"), nil
 }
 
 // postCommitHookScript returns the shell snippet; preserves the intended Across home.

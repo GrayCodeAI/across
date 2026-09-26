@@ -10,8 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const commandFlagsAnnotation = "across-required-flags"
-
 type CLIError struct {
 	Code    string
 	Message string
@@ -47,28 +45,6 @@ func operationFailed(format string, args ...any) error {
 
 func internalError(err error) error {
 	return &CLIError{Code: "internal", Message: "internal error", Err: err}
-}
-
-func requireFlags(cmd *cobra.Command, names ...string) {
-	if cmd.Annotations == nil {
-		cmd.Annotations = map[string]string{}
-	}
-	ordered := make([]string, 0, len(names))
-	seen := map[string]struct{}{}
-	if existing := cmd.Annotations[commandFlagsAnnotation]; existing != "" {
-		for _, name := range strings.Split(existing, ",") {
-			ordered = append(ordered, name)
-			seen[name] = struct{}{}
-		}
-	}
-	for _, name := range names {
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		ordered = append(ordered, name)
-		seen[name] = struct{}{}
-	}
-	cmd.Annotations[commandFlagsAnnotation] = strings.Join(ordered, ",")
 }
 
 func requiredFlags(names ...string) func(*cobra.Command, []string) error {
@@ -231,30 +207,12 @@ func configureCommandContracts(root *cobra.Command) {
 				}
 				return nil
 			}
-			preRunE := cmd.PreRunE
-			cmd.PreRunE = func(cmd *cobra.Command, values []string) error {
-				if err := validateRequiredFlags(cmd); err != nil {
-					return err
-				}
-				if preRunE != nil {
-					return preRunE(cmd, values)
-				}
-				return nil
-			}
 		}
 		for _, child := range cmd.Commands() {
 			visit(child)
 		}
 	}
 	visit(root)
-}
-
-func validateRequiredFlags(cmd *cobra.Command) error {
-	annotation := cmd.Annotations[commandFlagsAnnotation]
-	if annotation == "" {
-		return nil
-	}
-	return validateRequiredFlagNames(cmd, strings.Split(annotation, ","))
 }
 
 func validateRequiredFlagNames(cmd *cobra.Command, names []string) error {
