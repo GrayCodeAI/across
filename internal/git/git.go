@@ -22,6 +22,24 @@ func Run(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
+func ResolveRevision(path, revision string) (string, error) {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(revision) == "" {
+		return "", fmt.Errorf("git revision path and value must not be empty")
+	}
+	if strings.IndexAny(revision, "\x00\r\n") >= 0 {
+		return "", fmt.Errorf("git revision contains a control character")
+	}
+	resolved, err := Run(path, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	resolved = strings.TrimSpace(resolved)
+	if resolved == "" || strings.ContainsAny(resolved, "\r\n") {
+		return "", fmt.Errorf("git revision did not resolve to a commit")
+	}
+	return resolved, nil
+}
+
 // Head returns HEAD SHA for path (empty if unborn/no commits).
 func Head(path string) string {
 	out, err := Run(path, "rev-parse", "HEAD")
