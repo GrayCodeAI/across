@@ -197,6 +197,7 @@ func newContextShowCmd() *cobra.Command {
 		}
 		manifest.Type = "context"
 		manifest.GeneratedAt = created
+		manifest.Items = make([]ContextItem, 0)
 		rows, err := db.Query(`SELECT kind, ref_id, source_id, repository_id, revision, basis, title, body, reason, token_cost, included FROM context_items WHERE manifest_id=? ORDER BY position`, args[0])
 		if err != nil {
 			return err
