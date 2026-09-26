@@ -394,7 +394,24 @@ func requestAuthorized(r *http.Request, token string) bool {
 		return true
 	}
 	cookie, err := r.Cookie("across_token")
-	return err == nil && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) == 1
+	if err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) != 1 {
+		return false
+	}
+	return cookieRequestSameOrigin(r)
+}
+
+func cookieRequestSameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && parsed.Scheme == "http" && strings.EqualFold(parsed.Host, r.Host)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
