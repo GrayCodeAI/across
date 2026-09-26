@@ -303,6 +303,25 @@ func TestTombstonedSourceRequiresNewIdentity(t *testing.T) {
 	}
 }
 
+func TestTombstoneOnlyBlocksTheDeletedIdentity(t *testing.T) {
+	home, repoID, work := newDomainRepo(t)
+	first := writeRepoTranscript(t, work, "one.jsonl", `{"type":"UserPrompt","text":"one"}`)
+	second := writeRepoTranscript(t, work, "two.jsonl", `{"type":"UserPrompt","text":"two"}`)
+	oldID, err := importTranscriptForTest(home, repoID, first, "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runMutationCLI(home, "source", "delete", oldID); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := importTranscriptForTest(home, repoID, second, ""); err != nil {
+		t.Fatalf("unrelated import without a native identity was blocked: output=%q err=%v", output, err)
+	}
+	if _, err := importTranscriptForTest(home, repoID, first, ""); err == nil || !strings.Contains(FormatError(err), "tombstoned") {
+		t.Fatalf("re-import of the deleted origin was accepted: %v", err)
+	}
+}
+
 func TestImportSessionRecordsCallerPathAsOrigin(t *testing.T) {
 	home, repoID, work := newDomainRepo(t)
 	session, err := runMutationCLI(home, "session", "start", "--repo", repoID, "--agent", "codex")

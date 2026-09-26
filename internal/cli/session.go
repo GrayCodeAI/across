@@ -524,8 +524,8 @@ func rejectTombstonedSource(q rowsQuerier, repoID, kind, origin, nativeID string
 			}
 			continue
 		}
-		if oldKind == kind && (oldNative != "" || oldOrigin == origin) {
-			return conflict("source %q is tombstoned; supply a new native identity", id)
+		if oldKind == kind && oldOrigin == origin {
+			return conflict("source %q from %s is tombstoned; supply a new native identity", id, origin)
 		}
 	}
 	if err := rows.Err(); err != nil {
