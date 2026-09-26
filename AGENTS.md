@@ -37,7 +37,7 @@ Go 1.26.6 (`go.mod`) with cgo enabled (SQLite driver). CI pins the same toolchai
 
 - `cmd/across/` — the CLI entrypoint
 - `cmd/across-agent-*/` — one adapter binary per coding-agent provider (claude-code, codex, cursor, gemini, opencode, qwen, factory-droid, amp, goose)
-- `internal/` — core logic: `cli`, `config`, `event`, `git`, `logging`, `redact`, `store`
+- `internal/` — core logic: `cli`, `config`, `event`, `git`, `redact`, `store`
 - `e2e/` — end-to-end tests
 - `web/` — thin static UI (`app.js`, `index.html`, `styles.css`)
 - `docs/` — including `SECURITY.md` (threat model) and `agent-compatibility.md` (provider matrix)

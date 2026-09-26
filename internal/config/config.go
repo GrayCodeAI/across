@@ -18,7 +18,7 @@ func DefaultHome() string {
 	return filepath.Join(home, ".local", "share", "across")
 }
 
-var managedHomeDirectories = []string{"repositories", "mirrors", "workspaces", "plugins", "backups", "tmp", "logs"}
+var managedHomeDirectories = []string{"repositories", "mirrors", "workspaces", "plugins", "backups", "tmp"}
 
 func EnsureHome(home string) error {
 	if strings.TrimSpace(home) == "" {

@@ -261,8 +261,7 @@ across/
 │   ├── store/                   # SQLite, migrations, ID generation
 │   ├── git/                     # Git wrapper, safe hook installer
 │   ├── event/                   # Canonical events, native parsers, dedup
-│   ├── redact/                  # Deterministic secret redaction
-│   └── logging/                 # Structured stderr logging
+│   └── redact/                  # Deterministic secret redaction
 ├── web/                         # Thin read-only console (CSP, textContent-only)
 ├── docs/
 │   ├── SECURITY.md
@@ -297,8 +296,7 @@ The default data directory is `~/.local/share/across/` (override with `ACROSS_HO
 ├── workspaces/                  # Checkpoint restore worktrees
 ├── plugins/                     # Installed plugins
 ├── backups/                     # Backup archives
-├── tmp/                         # Temporary data (cleaned by `across clean`)
-└── logs/                        # Structured logs (when ACROSS_LOG=file)
+└── tmp/                         # Temporary data (cleaned by `across clean`)
 ```
 
 ---

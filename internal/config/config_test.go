@@ -43,6 +43,16 @@ func TestEnsureHomeRejectsSymlinkedManagedDirectory(t *testing.T) {
 	}
 }
 
+func TestEnsureHomeDoesNotCreateLogsDirectory(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := EnsureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "logs")); !os.IsNotExist(err) {
+		t.Fatalf("unused logs directory created: %v", err)
+	}
+}
+
 func TestResolveDirectoryRejectsSymlinkedParent(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
