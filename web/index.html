@@ -2,19 +2,28 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
 <title>Across v0.0.1 Local Alpha</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<header>
 <h1>Across v0.0.1 Local Alpha</h1>
-<p>Read-only observability console. CLI remains primary for sensitive mutations.</p>
-<nav>
-<a href="#repos">Repositories</a> <a href="#sessions">Sessions</a>
-<a href="#checkpoints">Checkpoints</a> <a href="#activity">Activity</a>
+<p>Read-only continuity console. The CLI remains authoritative for mutations.</p>
+<nav aria-label="Primary">
+<a href="#repos">Repositories</a>
+<a href="#sessions">Sessions</a>
+<a href="#checkpoints">Checkpoints</a>
+<a href="#activity">Activity</a>
 </nav>
-<section id="repos"><h2>Repositories</h2><div data-list="repos"></div></section>
-<section id="activity"><h2>Activity</h2><div data-list="activity"></div></section>
+</header>
+<main>
+<section id="repos" aria-labelledby="repos-heading"><h2 id="repos-heading">Repositories</h2><div data-list="repos" aria-live="polite"></div></section>
+<section id="sessions" aria-labelledby="sessions-heading"><h2 id="sessions-heading">Sessions</h2><div data-list="sessions" aria-live="polite"></div></section>
+<section id="checkpoints" aria-labelledby="checkpoints-heading"><h2 id="checkpoints-heading">Checkpoints</h2><div data-list="checkpoints" aria-live="polite"></div></section>
+<section id="activity" aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2><div data-list="activity" aria-live="polite"></div></section>
+</main>
 <script src="app.js"></script>
 </body>
 </html>

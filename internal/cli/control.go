@@ -12,12 +12,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/graycodeai/across/internal/store"
+	acrossweb "github.com/graycodeai/across/web"
 	"github.com/spf13/cobra"
 )
 
@@ -25,17 +28,22 @@ func newControlCmd() *cobra.Command {
 	c := &cobra.Command{Use: "control", Short: "Local control plane (org/project/principal/grant)"}
 	c.AddCommand(
 		&cobra.Command{Use: "org-create NAME", Args: cobra.ExactArgs(1), Short: "Create org", RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(args[0]) == "" {
+				return invalidArgument("organization name must not be empty")
+			}
 			db, _, err := openDB()
 			if err != nil {
 				return err
 			}
 			defer db.Close()
 			id := store.NewID("org")
-			_, _ = db.Exec(`INSERT INTO organizations(id, name, created_at) VALUES(?,?,?)`, id, args[0], store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO organizations(id, name, created_at) VALUES(?,?,?)`, id, args[0], store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), id)
 			return nil
 		}},
-		&cobra.Command{Use: "project-create --org ID --name N", Short: "Create project", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "project-create --org ID --name N", Short: "Create project", PreRunE: requiredFlags("org", "name"), RunE: func(cmd *cobra.Command, args []string) error {
 			org, _ := cmd.Flags().GetString("org")
 			name, _ := cmd.Flags().GetString("name")
 			db, _, err := openDB()
@@ -44,7 +52,9 @@ func newControlCmd() *cobra.Command {
 			}
 			defer db.Close()
 			id := store.NewID("proj")
-			_, _ = db.Exec(`INSERT INTO projects(id, org_id, name, created_at) VALUES(?,?,?,?)`, id, org, name, store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO projects(id, org_id, name, created_at) VALUES(?,?,?,?)`, id, org, name, store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), id)
 			return nil
 		}},
@@ -70,7 +80,7 @@ func newControlCmd() *cobra.Command {
 			}
 			return nil
 		}},
-		&cobra.Command{Use: "principal-create --org ID --name N", Short: "Create principal", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "principal-create --org ID --name N", Short: "Create principal", PreRunE: requiredFlags("org", "name"), RunE: func(cmd *cobra.Command, args []string) error {
 			org, _ := cmd.Flags().GetString("org")
 			name, _ := cmd.Flags().GetString("name")
 			db, _, err := openDB()
@@ -79,11 +89,13 @@ func newControlCmd() *cobra.Command {
 			}
 			defer db.Close()
 			id := store.NewID("prn")
-			_, _ = db.Exec(`INSERT INTO principals(id, org_id, name, created_at) VALUES(?,?,?,?)`, id, org, name, store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO principals(id, org_id, name, created_at) VALUES(?,?,?,?)`, id, org, name, store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), id)
 			return nil
 		}},
-		&cobra.Command{Use: "grant --principal ID --scope S --perm P", Short: "Grant permission", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "grant --principal ID --scope S --perm P", Short: "Grant permission", PreRunE: requiredFlags("principal", "scope"), RunE: func(cmd *cobra.Command, args []string) error {
 			prn, _ := cmd.Flags().GetString("principal")
 			scope, _ := cmd.Flags().GetString("scope")
 			perm, _ := cmd.Flags().GetString("perm")
@@ -92,7 +104,9 @@ func newControlCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`INSERT INTO grants(id, principal_id, scope, permission, created_at) VALUES(?,?,?,?,?)`, store.NewID("grt"), prn, scope, perm, store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO grants(id, principal_id, scope, permission, created_at) VALUES(?,?,?,?,?)`, store.NewID("grt"), prn, scope, perm, store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "granted")
 			return nil
 		}},
@@ -108,7 +122,7 @@ func newControlCmd() *cobra.Command {
 func newTokenCmd() *cobra.Command {
 	c := &cobra.Command{Use: "token", Short: "Principal tokens (hash stored, secret shown once)"}
 	c.AddCommand(
-		&cobra.Command{Use: "create --principal ID --name N", Short: "Create token", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "create --principal ID --name N", Short: "Create token", PreRunE: requiredFlags("principal", "name"), RunE: func(cmd *cobra.Command, args []string) error {
 			prn, _ := cmd.Flags().GetString("principal")
 			name, _ := cmd.Flags().GetString("name")
 			db, _, err := openDB()
@@ -117,11 +131,15 @@ func newTokenCmd() *cobra.Command {
 			}
 			defer db.Close()
 			var raw [32]byte
-			_, _ = rand.Read(raw[:])
+			if _, err := rand.Read(raw[:]); err != nil {
+				return err
+			}
 			secret := "across_" + hex.EncodeToString(raw[:])
 			h := sha256.Sum256([]byte(secret))
 			id := store.NewID("tok")
-			_, _ = db.Exec(`INSERT INTO principal_tokens(id, principal_id, name, hash, created_at) VALUES(?,?,?,?,?)`, id, prn, name, hex.EncodeToString(h[:]), store.NowUTC())
+			if _, err := db.Exec(`INSERT INTO principal_tokens(id, principal_id, name, hash, created_at) VALUES(?,?,?,?,?)`, id, prn, name, hex.EncodeToString(h[:]), store.NowUTC()); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), secret)
 			fmt.Fprintln(os.Stderr, "stored hash only; raw secret shown once")
 			return nil
@@ -147,7 +165,17 @@ func newTokenCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`UPDATE principal_tokens SET revoked_at=? WHERE id=?`, store.NowUTC(), args[0])
+			result, err := db.Exec(`UPDATE principal_tokens SET revoked_at=? WHERE id=?`, store.NowUTC(), args[0])
+			if err != nil {
+				return err
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if affected == 0 {
+				return notFound("token %q not found", args[0])
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "revoked")
 			return nil
 		}},
@@ -157,65 +185,131 @@ func newTokenCmd() *cobra.Command {
 	return c
 }
 
-func checkToken(db interface {
-	QueryRow(string, ...any) interface{}
-}, token string) bool {
-	return false
-}
-
 var _ = subtle.ConstantTimeCompare
 
 func newServeCmd() *cobra.Command {
-	c := &cobra.Command{Use: "serve [--addr 127.0.0.1:0]", Short: "Loopback web server (auth token, Host/Origin checks)", RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "serve [--addr 127.0.0.1:7681]", Args: cobra.NoArgs, Short: "Loopback web server (auth token, Host/Origin checks)", RunE: func(cmd *cobra.Command, args []string) error {
 		addr, _ := cmd.Flags().GetString("addr")
+		if err := validateServeAddr(addr); err != nil {
+			return err
+		}
 		db, home, err := openDB()
 		if err != nil {
 			return err
 		}
 		defer db.Close()
 		var raw [16]byte
-		_, _ = rand.Read(raw[:])
+		if _, err := rand.Read(raw[:]); err != nil {
+			return err
+		}
 		token := hex.EncodeToString(raw[:])
-		_ = os.WriteFile(filepath.Join(home, "serve.token"), []byte(token), 0o600)
-		fmt.Fprintf(cmd.OutOrStdout(), "token: %s\nlistening on %s (loopback only)\n", token, addr)
+		if err := os.WriteFile(filepath.Join(home, "serve.token"), []byte(token), 0o600); err != nil {
+			return err
+		}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return err
 		}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			if r.Host == "" {
-				http.Error(w, "bad host", 400)
-				return
-			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok":true,"version":"` + Version + `"}`))
+			_, _ = w.Write([]byte(`{"ok":true,"version":"` + Version + `"}`))
 		})
 		mux.HandleFunc("/api/repos", func(w http.ResponseWriter, r *http.Request) {
-			rows, _ := db.Query(`SELECT id, display_name, authority_mode, default_branch FROM repositories ORDER BY created_at`)
-			var out []map[string]string
-			if rows != nil {
-				defer rows.Close()
-				for rows.Next() {
-					var id, n, a, d string
-					rows.Scan(&id, &n, &a, &d)
-					out = append(out, map[string]string{"id": id, "name": n, "authority": a, "default_branch": d})
+			rows, err := db.Query(`SELECT id, display_name, authority_mode, default_branch FROM repositories ORDER BY created_at`)
+			if err != nil {
+				http.Error(w, "query failed", 500)
+				return
+			}
+			defer rows.Close()
+			out := make([]map[string]string, 0)
+			for rows.Next() {
+				var id, name, authority, branch string
+				if err := rows.Scan(&id, &name, &authority, &branch); err != nil {
+					http.Error(w, "read failed", 500)
+					return
 				}
+				out = append(out, map[string]string{"id": id, "name": name, "authority": authority, "default_branch": branch})
+			}
+			if err := rows.Err(); err != nil {
+				http.Error(w, "read failed", 500)
+				return
 			}
 			writeJSON(w, map[string]any{"repos": out})
 		})
-		mux.HandleFunc("/api/activity", func(w http.ResponseWriter, r *http.Request) {
-			rows, _ := db.Query(`SELECT kind, ref_id, summary, occurred_at FROM activities ORDER BY occurred_at DESC LIMIT 50`)
-			var out []map[string]string
-			if rows != nil {
-				defer rows.Close()
-				for rows.Next() {
-					var k, ref, s, a string
-					rows.Scan(&k, &ref, &s, &a)
-					out = append(out, map[string]string{"kind": k, "ref": ref, "summary": s, "at": a})
+		mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := db.Query(`SELECT id, repository_id, agent, state, started_at FROM sessions ORDER BY started_at DESC LIMIT 50`)
+			if err != nil {
+				http.Error(w, "query failed", 500)
+				return
+			}
+			defer rows.Close()
+			out := make([]map[string]string, 0)
+			for rows.Next() {
+				var id, repoID, agent, state, started string
+				if err := rows.Scan(&id, &repoID, &agent, &state, &started); err != nil {
+					http.Error(w, "read failed", 500)
+					return
 				}
+				out = append(out, map[string]string{"id": id, "repository": repoID, "agent": agent, "state": state, "started": started})
+			}
+			if err := rows.Err(); err != nil {
+				http.Error(w, "read failed", 500)
+				return
+			}
+			writeJSON(w, map[string]any{"sessions": out})
+		})
+		mux.HandleFunc("/api/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := db.Query(`SELECT id, repository_id, revision, session_id, created_at, message, basis FROM checkpoints ORDER BY created_at DESC LIMIT 50`)
+			if err != nil {
+				http.Error(w, "query failed", 500)
+				return
+			}
+			defer rows.Close()
+			out := make([]map[string]string, 0)
+			for rows.Next() {
+				var id, repoID, revision, sessionID, created, message, basis string
+				if err := rows.Scan(&id, &repoID, &revision, &sessionID, &created, &message, &basis); err != nil {
+					http.Error(w, "read failed", 500)
+					return
+				}
+				out = append(out, map[string]string{"id": id, "repository": repoID, "revision": revision, "session": sessionID, "created": created, "message": message, "basis": basis})
+			}
+			if err := rows.Err(); err != nil {
+				http.Error(w, "read failed", 500)
+				return
+			}
+			writeJSON(w, map[string]any{"checkpoints": out})
+		})
+		mux.HandleFunc("/api/activity", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := db.Query(`SELECT kind, ref_id, summary, occurred_at FROM activities ORDER BY occurred_at DESC LIMIT 50`)
+			if err != nil {
+				http.Error(w, "query failed", 500)
+				return
+			}
+			defer rows.Close()
+			out := make([]map[string]string, 0)
+			for rows.Next() {
+				var kind, refID, summary, occurred string
+				if err := rows.Scan(&kind, &refID, &summary, &occurred); err != nil {
+					http.Error(w, "read failed", 500)
+					return
+				}
+				out = append(out, map[string]string{"kind": kind, "ref": refID, "summary": summary, "at": occurred})
+			}
+			if err := rows.Err(); err != nil {
+				http.Error(w, "read failed", 500)
+				return
 			}
 			writeJSON(w, map[string]any{"activity": out})
+		})
+		mux.HandleFunc("/app.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			_, _ = w.Write([]byte(acrossweb.AppJS))
+		})
+		mux.HandleFunc("/styles.css", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+			_, _ = w.Write([]byte(acrossweb.StylesCSS))
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {
@@ -223,40 +317,84 @@ func newServeCmd() *cobra.Command {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'")
-			w.Write([]byte(webIndexHTML))
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+			_, _ = w.Write([]byte(acrossweb.IndexHTML))
 		})
 		mux.HandleFunc("/git/", gitSmartHTTPHandler(home))
-		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Host validation: loopback only (§76).
-			host := r.Host
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
-			if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !requestHostAllowed(r.Host) {
 				http.Error(w, "forbidden host", 403)
 				return
 			}
-			// Origin validation for browser flows.
-			if o := r.Header.Get("Origin"); o != "" {
-				if !strings.HasPrefix(o, "http://127.0.0.1") && !strings.HasPrefix(o, "http://localhost") {
-					http.Error(w, "forbidden origin", 403)
-					return
-				}
+			if !requestOriginAllowed(r) {
+				http.Error(w, "forbidden origin", 403)
+				return
 			}
-			if r.Header.Get("Authorization") != "Bearer "+token {
-				if r.URL.Path != "/health" {
-					http.Error(w, "unauthorized", 401)
-					return
-				}
+			if r.URL.Path == "/" && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
+				http.SetCookie(w, &http.Cookie{Name: "across_token", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+				return
+			}
+			if !requestAuthorized(r, token) && r.URL.Path != "/health" {
+				http.Error(w, "unauthorized", 401)
+				return
 			}
 			mux.ServeHTTP(w, r)
-		}))
+		})
+		fmt.Fprintf(cmd.OutOrStdout(), "token: %s\nlistening on http://%s/?token=%s (loopback only)\n", token, ln.Addr().String(), token)
+		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second}
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			return err
+		}
 		return nil
 	}}
-	c.Flags().String("addr", "127.0.0.1:7681", "addr")
-	_ = filepath.Separator
+	c.Flags().String("addr", "127.0.0.1:7681", "loopback address")
 	return c
+}
+
+func validateServeAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return invalidArgument("addr must be host:port")
+	}
+	if !requestHostAllowed(host) {
+		return invalidArgument("addr must bind to loopback")
+	}
+	return nil
+}
+
+func requestHostAllowed(hostport string) bool {
+	host := hostport
+	if parsed, _, err := net.SplitHostPort(hostport); err == nil {
+		host = parsed
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func requestOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || !requestHostAllowed(parsed.Host) {
+		return false
+	}
+	return true
+}
+
+func requestAuthorized(r *http.Request, token string) bool {
+	header := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if subtle.ConstantTimeCompare([]byte(header), []byte(token)) == 1 {
+		return true
+	}
+	cookie, err := r.Cookie("across_token")
+	return err == nil && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -346,27 +484,5 @@ func gitSmartHTTPHandler(home string) http.HandlerFunc {
 		w.Write(raw[idx+sep:])
 	}
 }
-
-const webIndexHTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Across Local Alpha</title></head>
-<body><h1>Across v0.0.1 Local Alpha</h1>
-<p>Read-only observability console. CLI remains primary for sensitive mutations.</p>
-<div id="repos"></div><div id="activity"></div>
-<script>
-async function load(path, el, keys){
-  const t = new URLSearchParams(location.search).get('token') || '';
-  const r = await fetch(path, {headers:{'Authorization':'Bearer '+t}});
-  const j = await r.json();
-  const div = document.getElementById(el);
-  const list = j[keys] || j.repos || j.activity || [];
-  list.forEach(function(item){
-    var p = document.createElement('p');
-    p.textContent = JSON.stringify(item);
-    div.appendChild(p);
-  });
-}
-load('/api/repos','repos','repos');
-load('/api/activity','activity','activity');
-</script></body></html>`
 
 var _ = sql.ErrNoRows
