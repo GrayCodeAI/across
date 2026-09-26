@@ -37,7 +37,7 @@ Go 1.26.6 (`go.mod`) with cgo enabled (SQLite driver). CI pins the same toolchai
 
 - `cmd/across/` — the CLI entrypoint
 - `cmd/across-agent-*/` — one adapter binary per coding-agent provider (claude-code, codex, cursor, gemini, opencode, qwen, factory-droid, amp, goose)
-- `internal/` — core logic: `cli`, `config`, `event`, `git`, `redact`, `store`
+- `internal/` — core logic: `adapter`, `cli`, `config`, `event`, `git`, `redact`, `store`
 - `e2e/` — end-to-end tests
 - `web/` — thin static UI (`app.js`, `index.html`, `styles.css`)
 - `docs/` — including `SECURITY.md` (threat model) and `agent-compatibility.md` (provider matrix)
@@ -66,10 +66,10 @@ When updating the provider matrix in `docs/agent-compatibility.md`, only move a 
 Do not weaken these without an explicit decision recorded in the PR. Full threat model in `docs/SECURITY.md`.
 
 - Retrieved context is **data, never permission**. Never let transcript or checkpoint content act as instructions.
-- Transcript paths are canonicalized, symlink-resolved, and confined to the provider root.
-- Hooks are chained, never silently overwritten; originals are preserved.
+- Transcript paths are canonicalized, symlink-resolved, and confined to the registered repository root (the caller's path, not a staged copy, is checked and recorded as the source origin).
+- Hooks are chained, never silently overwritten; originals are preserved and actually run (stdin-reading hooks receive the same input).
 - Checkpoint restore creates a new worktree and never mutates the user's checkout.
-- Backups reject path traversal and checksum mismatches.
+- Backups reject path traversal and checksum mismatches. Restore never replaces a non-empty directory that is not an Across home, and replaces an Across home only with `--force`, keeping the previous one.
 - Deletion uses tombstones to prevent resurrection. No silent destructive changes — migrations preserve provenance.
 - Known non-boundaries: the local runner is not a sandbox, plugins are not sandboxed, secret redaction is best-effort, and HTTP authorization is not an OS/filesystem boundary. Don't document them as stronger than they are.
 

@@ -6,8 +6,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/GrayCodeAI/across/workflows/CI/badge.svg)](https://github.com/GrayCodeAI/across/actions)
-[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/GrayCodeAI/across/releases/tag/v0.0.1)
-[![Status](https://img.shields.io/badge/status-0.0.1-blue)]()
+[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/GrayCodeAI/across)
+[![Status](https://img.shields.io/badge/status-local--alpha-blue)]()
 
 </div>
 
@@ -35,11 +35,11 @@
 
 | | |
 |---|---|
-| **Version** | `0.0.1` |
+| **Version** | `0.0.1` source snapshot (unreleased) |
 | **Status** | Local Alpha |
-| **Runtime** | Local-first, single binary |
+| **Runtime** | Local-first; one core CLI binary plus optional protocol-shell adapter binaries |
 | **Database** | SQLite (WAL, foreign keys, migrations) |
-| **Platforms** | macOS (qualified) · Linux, Windows (untested) |
+| **Platforms** | macOS (qualified) · Linux (CI-tested) · Windows (compile-checked only, untested) |
 | **License** | [MIT](LICENSE) |
 
 This is **not production-ready**. See [Limitations](#limitations) for what is unverified.
@@ -126,7 +126,7 @@ Across distinguishes kinds of knowledge. Never merge these:
 
 ### Checkpoint
 
-A durable, immutable record linking engineering activity to a git revision:
+A durable checkpoint record linking engineering activity to a git revision. The revision is resolved with `git rev-parse --verify` when the checkpoint is recorded; the record itself is not cryptographically sealed or enforced immutable (`agent-help` reports `immutable_enforced: false`).
 
 ```
 checkpoint_id, repository_id, revision, session_id,
@@ -166,12 +166,16 @@ across mirror sync / status --repo ID
 
 ```bash
 across session start --repo ID --agent NAME [--native-id N]
+across session fork PARENT --repo ID --agent NAME [--native-id N]
+                             # New session with parent_session_id + fork_type=fork
 across session list / show ID / close ID
 across source list [--repo ID]
-across source import --repo ID --kind KIND --file F
+across source import --repo ID --kind KIND --file F [--format FMT] [--native-id N]
                              # Formats: across, claude, cursor, codex, gemini, opencode
+                             # F must be inside the repository root (see Security Model)
+across agent import-session --agent NAME --repo ID --session SID --file F
 across source inspect SOURCE_ID
-across source delete SOURCE_ID   # Tombstoned, not resurrected
+across source delete SOURCE_ID   # Tombstoned; the same native id or origin cannot be re-imported
 ```
 
 ### Checkpoints
@@ -180,7 +184,10 @@ across source delete SOURCE_ID   # Tombstoned, not resurrected
 across checkpoint create --repo ID [--session S] [--message M]
 across checkpoint list / show / explain / compare A B
 across checkpoint restore ID  # → new worktree
-across hook install REPO_PATH
+across checkpoint bundle ID [--output F]
+                             # Versioned, hashed evidence bundle (checkpoint + linked verifications)
+across hook install REPO_PATH   # Chains an existing post-commit hook
+across hook uninstall REPO_PATH # Removes the Across hook, restores the chained original
 across hook post-commit       # Git hook entrypoint
 ```
 
@@ -191,10 +198,14 @@ across memory create --repo ID --kind KIND --title T --body B
 across memory list / show / approve / supersede OLD NEW
 across search QUERY
 across brief QUERY [--repo ID]
-across handoff --session ID [--output F]
+across handoff --session ID [--output F] [--format markdown|json]
 across dossier --change CHANGE_ID
+across context pack --repo ID --query Q [--session S] [--checkpoint CP] [--budget N] [--output F]
+across context show MANIFEST_ID
 across context diff --base R --head H --repo ID
 ```
+
+`context pack` builds a versioned, content-hashed manifest from the checkpoint boundary, approved memories and recent verifications, marking items that exceed the token budget as not included. Selection is deterministic; `--query` is required but does not yet rank or filter items. Handoffs, context manifests and checkpoint bundles are also recorded in the local store; there is no command to list the recorded copies yet.
 
 ### Verification
 
@@ -230,7 +241,7 @@ across queue add / merge
 across control org-create / project-create / principal-create / grant
 across token create / list / revoke
 across serve [--addr 127.0.0.1:7681]  # Loopback, bearer token, Git HTTP, web console
-across mcp                            # Read-only MCP stdio server (17 tools)
+across mcp                            # Read-only MCP stdio server (8 store-backed tools)
 ```
 
 ### System
@@ -242,9 +253,14 @@ across activity / recap
 across agent-help                    # Machine-readable JSON for coding agents
 across agent list / info NAME
 across plugin install / list / run / remove
-across backup create / verify / restore
+across backup create --output F / verify FILE
+across backup restore FILE --target-home DIR [--force]
+                                     # DIR must be new or empty; --force replaces an existing
+                                     # Across home and keeps it as DIR.across-old-TIMESTAMP
 across version
 ```
+
+Errors print as `across: <code>: <message>` on stderr. Exit codes: `2` invalid_argument, `3` not_found, `4` conflict, `5` operation_failed (including a failed `verify run` command), `1` internal.
 
 ---
 
@@ -254,21 +270,21 @@ across version
 across/
 ├── cmd/
 │   ├── across/                  # Main CLI
-│   └── across-agent-*/           # 9 adapter binaries (protocol v1, JSON stdio)
+│   └── across-agent-*/           # 9 protocol-shell binaries (protocol v1, JSON stdio)
 ├── internal/
 │   ├── cli/                     # Command implementations
 │   ├── config/                  # ACROSS_HOME, --home
 │   ├── store/                   # SQLite, migrations, ID generation
 │   ├── git/                     # Git wrapper, safe hook installer
 │   ├── event/                   # Canonical events, native parsers, dedup
+│   ├── adapter/                 # Shared protocol-v1 shell for cmd/across-agent-*
 │   └── redact/                  # Deterministic secret redaction
-├── web/                         # Thin read-only console (CSP, textContent-only)
+├── web/                         # Optional thin read-only console; browser qualification pending
 ├── docs/
 │   ├── SECURITY.md
 │   ├── agent-compatibility.md
 │   └── research/clean-room-decisions.md
 ├── e2e/                         # End-to-end tests
-├── scripts/                     # Build and utility scripts
 ├── .github/
 │   ├── workflows/ci.yml
 │   ├── ISSUE_TEMPLATE/
@@ -308,14 +324,15 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model and enforceme
 Key points:
 
 - Retrieved context is **data**, never permission.
-- Transcript paths are canonicalized, symlink-resolved, and confined to provider root.
-- Hooks are chained (never overwritten silently); originals preserved.
+- Transcript imports (`source import`, `agent import-session`) are canonicalized, symlink-resolved, size-bounded, and must be inside the registered repository root; a path outside it is rejected with `transcript path must be within the repository root`. Copy a provider export into the working tree (for example an untracked or git-ignored directory) before importing it.
+- Hooks are chained, never silently overwritten: the original is preserved as `<hook>.across-orig` and runs from the Across wrapper (stdin-reading hooks such as `pre-receive` receive the same input); ownership is marker-based and `across hook uninstall` restores the original.
 - Checkpoint restore creates a new worktree; never mutates your checkout.
-- Backups reject path traversal and checksum mismatches.
-- Deletion uses tombstones to prevent resurrection.
+- Backup restore is staged and validated (member list, checksums, modes, SQLite integrity) before it is committed by rename; it refuses a non-empty directory that is not an Across home and replaces an Across home only with `--force`, keeping the previous one beside it.
+- Deleted sources are tombstoned; re-importing the same native id, or the same origin without a native id, is refused.
 - The local runner is **not** a sandbox (user OS permissions).
 - Plugins are **not** sandboxed.
 - Secret redaction is best-effort.
+- `across serve` binds to loopback only and requires the bearer token for everything except `/health`; the browser console's cookie (set by opening `/?token=…`) is accepted only for same-origin requests, so pages on other localhost ports cannot use it.
 - HTTP authorization is not an OS/filesystem security boundary.
 
 ---
@@ -324,26 +341,26 @@ Key points:
 
 See [docs/agent-compatibility.md](docs/agent-compatibility.md) for the full matrix and import workflow.
 
-| Provider | Format | Qualification |
-|---|---|---|
-| Claude Code | JSONL | UNIMPLEMENTED |
-| Codex | rollout JSONL | UNIMPLEMENTED |
-| Cursor | JSONL | UNIMPLEMENTED |
-| Gemini CLI | session JSON | UNIMPLEMENTED |
-| OpenCode | export | SYNTHETIC_TESTED |
-| Qwen Code | transcript | UNIMPLEMENTED |
-| Factory Droid | JSONL | UNIMPLEMENTED |
-| Amp | export | UNIMPLEMENTED |
-| Goose | export | UNIMPLEMENTED |
+| Provider | Manual parser | Protocol shell | Provider integration |
+|---|---|---|---|
+| Claude Code | JSONL | protocol v1 | UNIMPLEMENTED |
+| Codex | rollout JSONL | protocol v1 | UNIMPLEMENTED |
+| Cursor | JSONL | protocol v1 | UNIMPLEMENTED |
+| Gemini CLI | session JSON | protocol v1 | UNIMPLEMENTED |
+| OpenCode | export; synthetic parser test | protocol v1 | UNIMPLEMENTED (parser evidence only) |
+| Qwen Code | not implemented | protocol v1 | UNIMPLEMENTED |
+| Factory Droid | not implemented | protocol v1 | UNIMPLEMENTED |
+| Amp | not implemented | protocol v1 | UNIMPLEMENTED |
+| Goose | not implemented | protocol v1 | UNIMPLEMENTED |
 
-Qualification: `UNIMPLEMENTED` · `SYNTHETIC_TESTED` · `LIVE_TESTED` · `LIVE_QUALIFIED` · `BLOCKED`
+Provider integration qualification: `UNIMPLEMENTED` · `SYNTHETIC_TESTED` · `LIVE_TESTED` · `LIVE_QUALIFIED` · `BLOCKED`. Protocol-shell tests and manual parser tests do not qualify a provider integration.
 
 ---
 
 ## Development
 
 ```bash
-make build          # Build all binaries to bin/
+make build          # Build the core CLI and optional protocol-shell binaries
 make test           # All tests, including E2E
 make test-e2e       # End-to-end tests only (alias: make e2e)
 make test-race      # Race detector
@@ -367,8 +384,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). One concern per commit. Evidence over co
 
 ### Unverified
 
-- Browser UI — environment-dependent (BLOCKED if localhost unreachable)
-- Linux, Windows — untested on this platform
+- Browser UI — not qualified in a browser; the served assets are the checked-in files embedded in the binary
+- Linux — CI runs the test suite on Linux; not otherwise qualified
+- Windows — compile-checked in CI only; not tested
 - Provider LIVE qualification — requires real provider sessions
 
 ### Deferred
