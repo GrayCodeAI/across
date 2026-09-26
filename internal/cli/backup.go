@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/graycodeai/across/internal/config"
@@ -83,16 +84,17 @@ func newBackupCmd() *cobra.Command {
 			},
 		},
 		&cobra.Command{
-			Use:     "restore FILE --target-home DIR",
+			Use:     "restore FILE --target-home DIR [--force]",
 			Args:    cobra.ExactArgs(1),
-			Short:   "Restore backup",
+			Short:   "Restore backup into a new or empty directory (--force replaces an Across home and keeps the old one)",
 			PreRunE: requiredFlags("target-home"),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				target, _ := cmd.Flags().GetString("target-home")
 				if target == "" {
 					return invalidArgument("--target-home required for restore target")
 				}
-				return restoreBackup(cmd, args[0], target)
+				force, _ := cmd.Flags().GetBool("force")
+				return restoreBackupWithOptions(cmd, args[0], target, force)
 			},
 		},
 	)
@@ -100,6 +102,7 @@ func newBackupCmd() *cobra.Command {
 	for _, child := range c.Commands() {
 		if child.Name() == "restore" {
 			child.Flags().String("target-home", "", "restore target home")
+			child.Flags().Bool("force", false, "replace an existing Across home; the previous home is kept as DIR.across-old-TIMESTAMP")
 		}
 	}
 	return c
@@ -723,13 +726,33 @@ func readStagedFile(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+type restoreTargetState int
+
+const (
+	restoreTargetMissing restoreTargetState = iota
+	restoreTargetEmpty
+	restoreTargetAcrossHome
+	restoreTargetForeign
+)
+
 func restoreBackup(cmd *cobra.Command, file, home string) error {
+	return restoreBackupWithOptions(cmd, file, home, false)
+}
+
+func restoreBackupWithOptions(cmd *cobra.Command, file, home string, force bool) error {
 	resolved, err := requireExistingFile(file)
 	if err != nil {
 		return err
 	}
-	target, existed, err := prepareRestoreTarget(home)
+	target, err := prepareRestoreTarget(home)
 	if err != nil {
+		return err
+	}
+	state, err := inspectRestoreTarget(target)
+	if err != nil {
+		return err
+	}
+	if err := restoreTargetAllowed(target, state, force); err != nil {
 		return err
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(target), "."+filepath.Base(target)+".across-stage-*")
@@ -743,53 +766,88 @@ func restoreBackup(cmd *cobra.Command, file, home string) error {
 	if err := validateSQLiteSnapshot(filepath.Join(stage, "across.db")); err != nil {
 		return fmt.Errorf("candidate SQLite snapshot rejected: %w", err)
 	}
+	if err := os.Remove(filepath.Join(stage, backupManifestName)); err != nil {
+		return err
+	}
 	if err := config.EnsureHome(stage); err != nil {
 		return err
 	}
-	if err := commitRestore(stage, target, existed); err != nil {
+	previous, err := commitRestore(stage, target, force)
+	if err != nil {
 		return err
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "restored to "+target)
+	if previous != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "previous home kept at "+previous)
+	}
 	return nil
 }
 
-func prepareRestoreTarget(home string) (string, bool, error) {
+func prepareRestoreTarget(home string) (string, error) {
 	if strings.TrimSpace(home) == "" {
-		return "", false, fmt.Errorf("restore target must not be empty")
+		return "", invalidArgument("restore target must not be empty")
 	}
 	abs, err := filepath.Abs(home)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	abs = filepath.Clean(abs)
-	if abs == string(filepath.Separator) {
-		return "", false, fmt.Errorf("refusing filesystem root as restore target")
+	if abs == filepath.VolumeName(abs)+string(filepath.Separator) {
+		return "", invalidArgument("refusing filesystem root as restore target")
 	}
-	parent := filepath.Dir(abs)
+	parent, err := config.ResolveUserPath(filepath.Dir(abs))
+	if err != nil {
+		return "", err
+	}
 	if err := config.EnsureDirectory(parent); err != nil {
-		return "", false, err
+		return "", err
 	}
-	resolvedParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return "", false, err
-	}
-	target := filepath.Join(resolvedParent, filepath.Base(abs))
+	return filepath.Join(parent, filepath.Base(abs)), nil
+}
+
+func inspectRestoreTarget(target string) (restoreTargetState, error) {
 	info, err := os.Lstat(target)
-	existed := true
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", false, err
-		}
-		existed = false
-	} else {
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", false, fmt.Errorf("restore target must not be a symlink: %s", home)
-		}
-		if !info.IsDir() {
-			return "", false, fmt.Errorf("restore target must be a directory: %s", home)
-		}
+	if os.IsNotExist(err) {
+		return restoreTargetMissing, nil
 	}
-	return target, existed, nil
+	if err != nil {
+		return restoreTargetForeign, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return restoreTargetForeign, invalidArgument("restore target must not be a symlink: %s", target)
+	}
+	if !info.IsDir() {
+		return restoreTargetForeign, invalidArgument("restore target must be a directory: %s", target)
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return restoreTargetForeign, err
+	}
+	if len(entries) == 0 {
+		return restoreTargetEmpty, nil
+	}
+	database, err := os.Lstat(config.DBPath(target))
+	if err == nil && database.Mode().IsRegular() {
+		return restoreTargetAcrossHome, nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return restoreTargetForeign, err
+	}
+	return restoreTargetForeign, nil
+}
+
+func restoreTargetAllowed(target string, state restoreTargetState, force bool) error {
+	switch state {
+	case restoreTargetMissing, restoreTargetEmpty:
+		return nil
+	case restoreTargetAcrossHome:
+		if force {
+			return nil
+		}
+		return conflict("restore target %s already contains an Across home; pass --force to replace it (the current home is kept as %s.across-old-TIMESTAMP)", target, target)
+	default:
+		return conflict("restore target %s is not empty and is not an Across home; restore into a new or empty directory", target)
+	}
 }
 
 func validateSQLiteSnapshot(file string) error {
@@ -851,56 +909,56 @@ func validateSQLiteSnapshot(file string) error {
 	return nil
 }
 
-func commitRestore(stage, target string, existed bool) error {
+func commitRestore(stage, target string, force bool) (string, error) {
 	parent := filepath.Dir(target)
-	currentInfo, err := os.Lstat(target)
-	if err == nil {
-		if currentInfo.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("restore target changed to a symlink")
-		}
-		if !currentInfo.IsDir() {
-			return fmt.Errorf("restore target changed to a non-directory")
-		}
-		existed = true
-	} else if os.IsNotExist(err) {
-		existed = false
-	} else {
-		return err
+	state, err := inspectRestoreTarget(target)
+	if err != nil {
+		return "", err
 	}
-	if !existed {
+	if err := restoreTargetAllowed(target, state, force); err != nil {
+		return "", err
+	}
+	if state == restoreTargetMissing {
 		if err := os.Rename(stage, target); err != nil {
-			return fmt.Errorf("commit restore: %w", err)
+			return "", fmt.Errorf("commit restore: %w", err)
 		}
 		syncRestoreParent(parent)
-		return nil
+		return "", nil
 	}
-	old, err := unusedPath(parent, "."+filepath.Base(target)+".across-old-*")
+	old, err := displacedRestorePath(target)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Rename(target, old); err != nil {
-		return fmt.Errorf("stage old restore target: %w", err)
+		return "", fmt.Errorf("move existing restore target aside: %w", err)
 	}
 	if err := os.Rename(stage, target); err != nil {
 		if rollbackErr := os.Rename(old, target); rollbackErr != nil {
-			return fmt.Errorf("commit restore: %w; rollback failed: %v", err, rollbackErr)
+			return "", fmt.Errorf("commit restore: %w; rollback failed, previous home is at %s: %v", err, old, rollbackErr)
 		}
-		return fmt.Errorf("commit restore: %w", err)
+		return "", fmt.Errorf("commit restore: %w", err)
 	}
-	_ = os.RemoveAll(old)
 	syncRestoreParent(parent)
-	return nil
+	if state == restoreTargetEmpty && os.Remove(old) == nil {
+		return "", nil
+	}
+	return old, nil
 }
 
-func unusedPath(parent, pattern string) (string, error) {
-	path, err := os.MkdirTemp(parent, pattern)
-	if err != nil {
-		return "", err
+func displacedRestorePath(target string) (string, error) {
+	base := target + ".across-old-" + time.Now().UTC().Format("20060102T150405Z")
+	candidate := base
+	for i := 1; i <= 100; i++ {
+		_, err := os.Lstat(candidate)
+		if os.IsNotExist(err) {
+			return candidate, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
-	if err := os.Remove(path); err != nil {
-		return "", err
-	}
-	return path, nil
+	return "", conflict("no unused name to keep the previous home beside %s", target)
 }
 
 func syncRestoreParent(parent string) {

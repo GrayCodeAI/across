@@ -117,13 +117,11 @@ func TestRestoreDoesNotWriteThroughSymlinkParent(t *testing.T) {
 	})
 	outside := t.TempDir()
 	target := filepath.Join(t.TempDir(), "home")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeAcrossHomeMarker(t, target)
 	if err := os.Symlink(outside, filepath.Join(target, "plugins")); err != nil {
 		t.Fatal(err)
 	}
-	if err := restoreBackup(&cobra.Command{}, archive, target); err != nil {
+	if err := restoreBackupWithOptions(&cobra.Command{}, archive, target, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "evil")); !os.IsNotExist(err) {
@@ -138,7 +136,7 @@ func TestRestoreDoesNotWriteThroughSymlinkParent(t *testing.T) {
 	}
 }
 
-func TestRestoreRejectsSymlinkedTargetParent(t *testing.T) {
+func TestRestoreResolvesSymlinkedTargetParentAndKeepsPreviousHome(t *testing.T) {
 	snapshot := validBackupSnapshot(t)
 	archive := writeBackupFixture(t, []backupFixtureEntry{{name: backupSnapshotName, data: snapshot, listed: true}})
 	root := t.TempDir()
@@ -148,33 +146,42 @@ func TestRestoreRejectsSymlinkedTargetParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(link, "home")
-	if err := os.MkdirAll(target, 0o755); err != nil {
+	writeAcrossHomeMarker(t, target)
+	if err := os.WriteFile(filepath.Join(target, "sentinel"), []byte("old-state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sentinel := filepath.Join(target, "sentinel")
-	if err := os.WriteFile(sentinel, []byte("old-state"), 0o600); err != nil {
+	if err := restoreBackupWithOptions(&cobra.Command{}, archive, target, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := restoreBackup(&cobra.Command{}, archive, target); err == nil {
-		t.Fatal("restore beneath a symlinked target parent was accepted")
+	resolved, err := filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
 	}
-	data, err := os.ReadFile(sentinel)
+	if err := validateSQLiteSnapshot(filepath.Join(resolved, "home", "across.db")); err != nil {
+		t.Fatalf("restored home is not at the resolved target: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(link, "home")); err != nil {
+		t.Fatalf("target is not reachable through the user's path: %v", err)
+	}
+	previous := displacedHomes(t, filepath.Join(resolved, "home"))
+	if len(previous) != 1 {
+		t.Fatalf("previous home not kept: %v", previous)
+	}
+	data, err := os.ReadFile(filepath.Join(previous[0], "sentinel"))
 	if err != nil || string(data) != "old-state" {
-		t.Fatalf("old target changed: %q %v", data, err)
+		t.Fatalf("previous home changed: %q %v", data, err)
 	}
 }
 
 func TestRestoreRejectsInvalidSnapshotAndPreservesTarget(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "home")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeAcrossHomeMarker(t, target)
 	sentinel := filepath.Join(target, "sentinel")
 	if err := os.WriteFile(sentinel, []byte("old-state"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	archive := writeBackupFixture(t, []backupFixtureEntry{{name: backupSnapshotName, data: []byte("not sqlite"), listed: true}})
-	err := restoreBackup(&cobra.Command{}, archive, target)
+	err := restoreBackupWithOptions(&cobra.Command{}, archive, target, true)
 	if err == nil || !strings.Contains(err.Error(), "candidate SQLite") {
 		t.Fatalf("expected candidate validation failure, got %v", err)
 	}
@@ -182,6 +189,102 @@ func TestRestoreRejectsInvalidSnapshotAndPreservesTarget(t *testing.T) {
 	if readErr != nil || string(data) != "old-state" {
 		t.Fatalf("old target changed: %q %v", data, readErr)
 	}
+	if previous := displacedHomes(t, target); len(previous) != 0 {
+		t.Fatalf("failed restore displaced the target: %v", previous)
+	}
+}
+
+func TestRestoreRefusesNonEmptyForeignTarget(t *testing.T) {
+	archive := writeBackupFixture(t, []backupFixtureEntry{{name: backupSnapshotName, data: validBackupSnapshot(t), listed: true}})
+	target := filepath.Join(t.TempDir(), "precious")
+	important := filepath.Join(target, "docs", "important.txt")
+	if err := os.MkdirAll(filepath.Dir(important), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(important, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, force := range []bool{false, true} {
+		err := restoreBackupWithOptions(&cobra.Command{}, archive, target, force)
+		if err == nil || ExitCode(err) != 4 || !strings.Contains(err.Error(), "not an Across home") {
+			t.Fatalf("force=%v: foreign target was not refused: %v", force, err)
+		}
+	}
+	data, err := os.ReadFile(important)
+	if err != nil || string(data) != "keep me" {
+		t.Fatalf("foreign target changed: %q %v", data, err)
+	}
+	if previous := displacedHomes(t, target); len(previous) != 0 {
+		t.Fatalf("foreign target was moved: %v", previous)
+	}
+}
+
+func TestRestoreRequiresForceToReplaceAcrossHome(t *testing.T) {
+	archive := writeBackupFixture(t, []backupFixtureEntry{{name: backupSnapshotName, data: validBackupSnapshot(t), listed: true}})
+	target := filepath.Join(t.TempDir(), "home")
+	db, err := store.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = restoreBackupWithOptions(&cobra.Command{}, archive, target, false)
+	if err == nil || ExitCode(err) != 4 || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("existing Across home was replaced without --force: %v", err)
+	}
+	var output strings.Builder
+	cmd := &cobra.Command{}
+	cmd.SetOut(&output)
+	if err := restoreBackupWithOptions(cmd, archive, target, true); err != nil {
+		t.Fatal(err)
+	}
+	previous := displacedHomes(t, target)
+	if len(previous) != 1 || !strings.Contains(output.String(), previous[0]) {
+		t.Fatalf("previous home not kept or not reported: %v %q", previous, output.String())
+	}
+	if _, err := os.Stat(filepath.Join(previous[0], "across.db")); err != nil {
+		t.Fatalf("previous database missing: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(target, backupManifestName)); !os.IsNotExist(err) {
+		t.Fatalf("backup manifest left in restored home: %v", err)
+	}
+}
+
+func TestRestoreIntoEmptyDirectory(t *testing.T) {
+	archive := writeBackupFixture(t, []backupFixtureEntry{{name: backupSnapshotName, data: validBackupSnapshot(t), listed: true}})
+	target := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreBackupWithOptions(&cobra.Command{}, archive, target, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSQLiteSnapshot(filepath.Join(target, "across.db")); err != nil {
+		t.Fatal(err)
+	}
+	if previous := displacedHomes(t, target); len(previous) != 0 {
+		t.Fatalf("empty target left a displaced directory: %v", previous)
+	}
+}
+
+func writeAcrossHomeMarker(t *testing.T, home string) {
+	t.Helper()
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "across.db"), []byte("old database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func displacedHomes(t *testing.T, target string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(target + ".across-old-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
 }
 
 func validBackupSnapshot(t *testing.T) []byte {

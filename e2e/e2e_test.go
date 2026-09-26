@@ -315,6 +315,25 @@ func TestE2E_BackupRoundTrip(t *testing.T) {
 	if err != nil || !strings.Contains(string(out2), "checkpoint_revision") && !strings.Contains(string(out2), "cp_") {
 		t.Fatalf("restored checkpoint missing: %v %s", err, out2)
 	}
+	again := exec.Command(bin, "backup", "restore", bak, "--target-home", home2)
+	if out, err := again.CombinedOutput(); exitCode(err) != 4 || !strings.Contains(string(out), "--force") {
+		t.Fatalf("restore over an Across home without --force: exit=%d %s", exitCode(err), out)
+	}
+	forced := exec.Command(bin, "backup", "restore", bak, "--target-home", home2, "--force")
+	if out, err := forced.CombinedOutput(); err != nil || !strings.Contains(string(out), "previous home kept at") {
+		t.Fatalf("forced restore: %v %s", err, out)
+	}
+	precious := filepath.Join(t.TempDir(), "precious")
+	important := filepath.Join(precious, "docs", "important.txt")
+	os.MkdirAll(filepath.Dir(important), 0o755)
+	os.WriteFile(important, []byte("keep"), 0o644)
+	foreign := exec.Command(bin, "backup", "restore", bak, "--target-home", precious, "--force")
+	if out, err := foreign.CombinedOutput(); exitCode(err) != 4 || !strings.Contains(string(out), "not an Across home") {
+		t.Fatalf("restore over a foreign directory: exit=%d %s", exitCode(err), out)
+	}
+	if data, err := os.ReadFile(important); err != nil || string(data) != "keep" {
+		t.Fatalf("foreign directory changed: %q %v", data, err)
+	}
 }
 
 func TestE2E_MCPProtocol(t *testing.T) {
