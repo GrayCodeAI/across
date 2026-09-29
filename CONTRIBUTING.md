@@ -11,19 +11,20 @@ Thanks for your interest. Across is in local alpha — contributions should be s
 
 ## Getting started
 
+Requires Go 1.26.6 or newer (see `go.mod`), `git`, and a C compiler for cgo (the SQLite driver).
+
 ```bash
 git clone https://github.com/GrayCodeAI/across.git
 cd across
-go mod tidy
 make build
 make test
-make test-race
+make check
 ```
 
 ## Making changes
 
 - One concern per commit. Write a concise commit message explaining *why*.
-- Run `make check` (vet + test-race) before opening a PR.
+- Run `make check` (gofmt check + vet + test-race) before opening a PR.
 - Add tests for new behavior. A feature without a test is not implemented.
 - Update docs in the same commit if behavior changes.
 

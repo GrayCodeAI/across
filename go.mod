@@ -1,6 +1,6 @@
 module github.com/graycodeai/across
 
-go 1.24
+go 1.26.6
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
