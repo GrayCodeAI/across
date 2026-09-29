@@ -17,17 +17,21 @@ One concern per commit. Keep PRs focused — one feature or fix each. Describe t
 ## Build & Test
 
 ```bash
-make build        # across + all cmd/across-agent-* binaries into bin/
+make build        # core CLI + cmd/across-agent-* binaries into bin/
 make test         # go test -count=1 ./...
+make test-e2e     # dedicated E2E suite
 make test-race    # go test -race -count=1 ./...
 make vet          # go vet ./...
-make e2e          # go test -count=1 -run E2E ./...
+make e2e          # alias for test-e2e
 make fuzz         # FuzzAcrossJSONL, 15s
-make check        # vet + test-race — run this before opening a PR
+make coverage     # coverage profile (coverage.out)
+make cross-check  # windows/amd64 vet + build (compile-only, CGO disabled)
+make vulncheck    # govulncheck at the pinned version
+make check        # gofmt check + vet + test-race — run before opening a PR
 make fmt          # gofmt -w .
 ```
 
-CI runs `go mod tidy`, `go build ./...`, `make vet`, `make test`, `make test-race`. Go 1.24.
+Go 1.26.6 (`go.mod`) with cgo enabled (SQLite driver). CI pins the same toolchain with `GOTOOLCHAIN=local` and runs `go mod tidy -diff`, gofmt, build/vet/test on Linux and macOS, a Windows compile-only check, race, dedicated E2E, coverage, and govulncheck. Windows is not runtime-tested.
 
 ## Structure
 
