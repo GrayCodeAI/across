@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,12 +15,15 @@ import (
 func newMemoryCmd() *cobra.Command {
 	c := &cobra.Command{Use: "memory", Short: "Engineering memory"}
 	c.AddCommand(
-		&cobra.Command{Use: "create --repo ID --kind KIND --title T --body B [--source S]", Short: "Create memory (candidate by default)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "create --repo ID --kind KIND --title T --body B [--source S]", Short: "Create memory (candidate by default)", PreRunE: requiredFlags("repo", "title", "body"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			kind, _ := cmd.Flags().GetString("kind")
 			title, _ := cmd.Flags().GetString("title")
 			body, _ := cmd.Flags().GetString("body")
 			src, _ := cmd.Flags().GetString("source")
+			if err := requireOneOf("kind", kind, "decision", "fact", "procedure", "task", "preference", "outcome", "note"); err != nil {
+				return err
+			}
 			db, _, err := openDB()
 			if err != nil {
 				return err
@@ -30,21 +34,39 @@ func newMemoryCmd() *cobra.Command {
 			}
 			id := store.NewID("mem")
 			now := store.NowUTC()
-			if _, err := db.Exec(`INSERT INTO memories(id, repository_id, kind, state, title, body, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)`,
-				id, repoID, kind, "candidate", title, body, now, now); err != nil {
+			if err := withTx(db, func(tx sqlRunner) error {
+				if src != "" {
+					if err := sourceMustBelong(tx, repoID, src); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.Exec(`INSERT INTO memories(id, repository_id, kind, state, title, body, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+					id, repoID, kind, "candidate", title, body, now, now); err != nil {
+					return err
+				}
+				if src != "" {
+					if _, err := tx.Exec(`INSERT INTO memory_sources(memory_id, source_id) VALUES(?,?)`, id, src); err != nil {
+						return err
+					}
+				}
+				if err := indexDocTx(tx, "memory", id, repoID, title, body); err != nil {
+					return err
+				}
+				return logActivityTx(tx, "memory.create", repoID, id, kind+": "+title)
+			}); err != nil {
 				return err
 			}
-			if src != "" {
-				_, _ = db.Exec(`INSERT INTO memory_sources(memory_id, source_id) VALUES(?,?)`, id, src)
-			}
-			indexDoc(db, "memory", id, repoID, title, body)
-			logActivity(db, "memory.create", repoID, id, kind+": "+title)
 			fmt.Fprintln(cmd.OutOrStdout(), id)
 			return nil
 		}},
 		&cobra.Command{Use: "list [--repo ID] [--state S]", Short: "List memories", RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			state, _ := cmd.Flags().GetString("state")
+			if state != "" {
+				if err := requireOneOf("state", state, "candidate", "approved", "superseded"); err != nil {
+					return err
+				}
+			}
 			db, _, err := openDB()
 			if err != nil {
 				return err
@@ -81,7 +103,7 @@ func newMemoryCmd() *cobra.Command {
 			defer db.Close()
 			var id, rp, k, s, t, b, ca string
 			if err := db.QueryRow(`SELECT id, repository_id, kind, state, title, body, created_at FROM memories WHERE id=?`, args[0]).Scan(&id, &rp, &k, &s, &t, &b, &ca); err != nil {
-				return fmt.Errorf("memory not found")
+				return notFound("memory %q not found", args[0])
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "id: %s\nrepo: %s\nkind: %s\nstate: %s\ntitle: %s\ncreated: %s\n\n%s\n\nNote: memory state %s means approved engineering context, not objective truth.\n", id, rp, k, s, t, ca, b, s)
 			return nil
@@ -92,17 +114,79 @@ func newMemoryCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`UPDATE memories SET state='approved', updated_at=? WHERE id=?`, store.NowUTC(), args[0])
+			if err := withTx(db, func(tx sqlRunner) error {
+				memory, err := memoryMustExist(tx, args[0])
+				if err != nil {
+					return err
+				}
+				if memory.state != "candidate" {
+					return conflict("memory %q is not an existing candidate", args[0])
+				}
+				now := store.NowUTC()
+				result, err := tx.Exec(`UPDATE memories SET state='approved', updated_at=? WHERE id=? AND state='candidate'`, now, args[0])
+				if err != nil {
+					return err
+				}
+				affected, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if affected != 1 {
+					return conflict("memory %q is not an existing candidate", args[0])
+				}
+				if err := indexDocTx(tx, "memory", args[0], memory.repositoryID, memory.title, memory.body); err != nil {
+					return err
+				}
+				return logActivityTx(tx, "memory.approve", memory.repositoryID, args[0], "memory approved")
+			}); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "approved")
 			return nil
 		}},
 		&cobra.Command{Use: "supersede OLD NEW", Args: cobra.ExactArgs(2), Short: "Supersede memory", RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] == args[1] {
+				return invalidArgument("a memory cannot supersede itself")
+			}
 			db, _, err := openDB()
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			_, _ = db.Exec(`UPDATE memories SET state='superseded', superseded_by=?, updated_at=? WHERE id=?`, args[1], store.NowUTC(), args[0])
+			if err := withTx(db, func(tx sqlRunner) error {
+				oldMemory, err := memoryMustExist(tx, args[0])
+				if err != nil {
+					return err
+				}
+				newMemory, err := memoryMustExist(tx, args[1])
+				if err != nil {
+					return err
+				}
+				if oldMemory.repositoryID != newMemory.repositoryID {
+					return conflict("memories %q and %q belong to different repositories", args[0], args[1])
+				}
+				if oldMemory.state == "superseded" {
+					return conflict("memory %q is already superseded", args[0])
+				}
+				now := store.NowUTC()
+				result, err := tx.Exec(`UPDATE memories SET state='superseded', superseded_by=?, updated_at=? WHERE id=? AND state!='superseded'`, args[1], now, args[0])
+				if err != nil {
+					return err
+				}
+				affected, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if affected != 1 {
+					return conflict("memory %q is missing or already superseded", args[0])
+				}
+				if _, err := tx.Exec(`DELETE FROM search_index WHERE kind='memory' AND ref_id=?`, args[0]); err != nil {
+					return err
+				}
+				return logActivityTx(tx, "memory.supersede", oldMemory.repositoryID, args[0], "memory superseded by "+args[1])
+			}); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "superseded")
 			return nil
 		}},
@@ -118,6 +202,9 @@ func newMemoryCmd() *cobra.Command {
 
 func newSearchCmd() *cobra.Command {
 	c := &cobra.Command{Use: "search QUERY", Args: cobra.ExactArgs(1), Short: "Search sessions/memory/verifications (FTS deferred to when FTS5 ships in default builds)", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return invalidArgument("query must not be empty")
+		}
 		db, _, err := openDB()
 		if err != nil {
 			return err
@@ -142,6 +229,9 @@ func newSearchCmd() *cobra.Command {
 
 func newBriefCmd() *cobra.Command {
 	c := &cobra.Command{Use: "brief QUERY", Args: cobra.ExactArgs(1), Short: "Continuity brief", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return invalidArgument("query must not be empty")
+		}
 		db, _, err := openDB()
 		if err != nil {
 			return err
@@ -211,43 +301,138 @@ func newBriefCmd() *cobra.Command {
 }
 
 func newHandoffCmd() *cobra.Command {
-	c := &cobra.Command{Use: "handoff --session ID [--output F]", Short: "Write handoff", RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "handoff --session ID [--output F]", Short: "Write handoff", PreRunE: requiredFlags("session"), RunE: func(cmd *cobra.Command, args []string) error {
 		sess, _ := cmd.Flags().GetString("session")
 		out, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
+		if err := requireOneOf("format", format, "markdown", "json"); err != nil {
+			return err
+		}
 		db, _, err := openDB()
 		if err != nil {
 			return err
 		}
 		defer db.Close()
-		var repoID, agent, lcp string
-		if err := db.QueryRow(`SELECT repository_id, agent, latest_checkpoint_id FROM sessions WHERE id=?`, sess).Scan(&repoID, &agent, &lcp); err != nil {
-			return fmt.Errorf("session not found")
+		var info sessionInfo
+		if err := db.QueryRow(`SELECT id, repository_id, agent, native_session_id, state FROM sessions WHERE id=?`, sess).Scan(&info.id, &info.repositoryID, &info.agent, &info.nativeSessionID, &info.state); err != nil {
+			if err == sql.ErrNoRows {
+				return notFound("session %q not found", sess)
+			}
+			return err
 		}
-		doc := map[string]any{
-			"session": sess, "repository": repoID, "agent": agent,
-			"latest_checkpoint": lcp, "unknowns": []string{"remaining work beyond recorded checkpoints is UNKNOWN"},
-		}
-		var s string
-		if format == "json" {
-			b, _ := json.MarshalIndent(doc, "", "  ")
-			s = string(b)
-		} else {
-			s = "# Handoff\n\nsession: " + sess + "\nrepo: " + repoID + "\nagent: " + agent + "\nlatest_checkpoint: " + lcp + "\n\n## Unknowns\n- remaining work UNKNOWN\n"
-		}
-		if out != "" {
-			if err := os.WriteFile(out, []byte(s), 0o644); err != nil {
+		var latest, revision, basis, message string
+		if info.state != "" {
+			if err := db.QueryRow(`SELECT latest_checkpoint_id FROM sessions WHERE id=?`, sess).Scan(&latest); err != nil {
 				return err
 			}
-		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), s)
 		}
+		if latest != "" {
+			if err := db.QueryRow(`SELECT revision, basis, message FROM checkpoints WHERE id=? AND repository_id=?`, latest, info.repositoryID).Scan(&revision, &basis, &message); err != nil {
+				return notFound("latest checkpoint %q not found", latest)
+			}
+		}
+		envelope := HandoffEnvelope{
+			SchemaVersion: contractSchemaVersion,
+			ID:            newContractID("hnd"),
+			Type:          "handoff",
+			Session:       sess,
+			Repository:    info.repositoryID,
+			Revision:      revision,
+			Latest:        latest,
+			Evidence:      []EvidenceReference{},
+			Unknowns:      []string{"remaining work beyond recorded checkpoints is UNKNOWN"},
+			GeneratedAt:   store.NowUTC(),
+		}
+		if latest != "" {
+			envelope.Evidence = append(envelope.Evidence, EvidenceReference{Kind: "checkpoint", ID: latest, Revision: revision, Basis: basis, Reason: message})
+		}
+		decisionRows, err := db.Query(`SELECT id, title, state FROM memories WHERE repository_id=? AND state='approved' ORDER BY created_at DESC LIMIT 10`, info.repositoryID)
+		if err != nil {
+			return err
+		}
+		for decisionRows.Next() {
+			var id, title, state string
+			if err := decisionRows.Scan(&id, &title, &state); err != nil {
+				decisionRows.Close()
+				return err
+			}
+			envelope.Evidence = append(envelope.Evidence, EvidenceReference{Kind: "memory", ID: id, Basis: state, Reason: title})
+		}
+		if err := decisionRows.Err(); err != nil {
+			decisionRows.Close()
+			return err
+		}
+		if err := decisionRows.Close(); err != nil {
+			return err
+		}
+		verificationRows, err := db.Query(`SELECT id, name, revision_after, basis, exit_code FROM verifications WHERE repository_id=? ORDER BY started_at DESC LIMIT 10`, info.repositoryID)
+		if err != nil {
+			return err
+		}
+		for verificationRows.Next() {
+			var id, name, rev, basis string
+			var exitCode int
+			if err := verificationRows.Scan(&id, &name, &rev, &basis, &exitCode); err != nil {
+				verificationRows.Close()
+				return err
+			}
+			envelope.Evidence = append(envelope.Evidence, EvidenceReference{Kind: "verification", ID: id, Revision: rev, Basis: basis, Reason: fmt.Sprintf("%s exit=%d", name, exitCode)})
+		}
+		if err := verificationRows.Err(); err != nil {
+			verificationRows.Close()
+			return err
+		}
+		if err := verificationRows.Close(); err != nil {
+			return err
+		}
+		if err := sealHandoff(&envelope); err != nil {
+			return err
+		}
+		var content string
+		if format == "json" {
+			encoded, err := json.MarshalIndent(envelope, "", "  ")
+			if err != nil {
+				return err
+			}
+			content = string(encoded)
+		} else {
+			content = handoffMarkdown(envelope)
+		}
+		if err := withTx(db, func(tx sqlRunner) error {
+			_, err := tx.Exec(`INSERT INTO handoffs(id, session_id, repository_id, revision, schema_version, format, content, content_hash, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+				envelope.ID, sess, info.repositoryID, revision, contractSchemaVersion, format, content, envelope.ContentHash, envelope.GeneratedAt)
+			return err
+		}); err != nil {
+			return err
+		}
+		if out != "" {
+			resolved, err := requireOutputFile(out)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(resolved, []byte(content), 0o644)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), content)
 		return nil
 	}}
 	c.Flags().String("session", "", "session id")
 	c.Flags().String("output", "", "output file")
 	c.Flags().String("format", "markdown", "markdown|json")
 	return c
+}
+
+func handoffMarkdown(envelope HandoffEnvelope) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Handoff\n\nid: %s\nschema: %d\nsession: %s\nrepo: %s\nrevision: %s\nlatest_checkpoint: %s\n\n", envelope.ID, envelope.SchemaVersion, envelope.Session, envelope.Repository, envelope.Revision, envelope.Latest)
+	b.WriteString("## Evidence\n")
+	for _, evidence := range envelope.Evidence {
+		fmt.Fprintf(&b, "- %s %s [%s] %s\n", evidence.Kind, evidence.ID, evidence.Basis, evidence.Reason)
+	}
+	b.WriteString("\n## Unknowns\n")
+	for _, unknown := range envelope.Unknowns {
+		fmt.Fprintf(&b, "- %s\n", unknown)
+	}
+	return b.String()
 }
 
 func newDossierCmd() *cobra.Command {
@@ -339,7 +524,7 @@ func newDossierCmd() *cobra.Command {
 
 func newContextCmd() *cobra.Command {
 	c := &cobra.Command{Use: "context", Short: "Context utilities"}
-	c.AddCommand(&cobra.Command{Use: "diff --base R --head H --repo ID", Short: "Staleness analysis over changed files", RunE: func(cmd *cobra.Command, args []string) error {
+	c.AddCommand(newContextPackCmd(), newContextShowCmd(), &cobra.Command{Use: "diff --base R --head H --repo ID", Short: "Staleness analysis over changed files", PreRunE: requiredFlags("base", "head", "repo"), RunE: func(cmd *cobra.Command, args []string) error {
 		base, _ := cmd.Flags().GetString("base")
 		head, _ := cmd.Flags().GetString("head")
 		repo, _ := cmd.Flags().GetString("repo")
@@ -348,12 +533,24 @@ func newContextCmd() *cobra.Command {
 			return err
 		}
 		defer db.Close()
-		var canon string
-		if err := db.QueryRow(`SELECT canonical_path FROM repositories WHERE id=?`, repo).Scan(&canon); err != nil {
-			return fmt.Errorf("repository not found")
+		canon, _, err := repoMustExist(db, repo)
+		if err != nil {
+			return err
+		}
+		resolvedBase, err := git.ResolveRevision(canon, base)
+		if err != nil {
+			return invalidArgument("revision %q does not resolve in repository %q", base, repo)
+		}
+		resolvedHead, err := git.ResolveRevision(canon, head)
+		if err != nil {
+			return invalidArgument("revision %q does not resolve in repository %q", head, repo)
 		}
 		changed := map[string]bool{}
-		if out, err := git.Run(canon, "diff", "--name-only", base, head); err == nil && out != "" {
+		out, err := git.Run(canon, "diff", "--name-only", resolvedBase, resolvedHead)
+		if err != nil {
+			return err
+		}
+		if out != "" {
 			for _, f := range strings.Split(out, "\n") {
 				if f != "" {
 					changed[f] = true
@@ -390,7 +587,7 @@ func newContextCmd() *cobra.Command {
 			for vrows.Next() {
 				var id, nm, rev string
 				vrows.Scan(&id, &nm, &rev)
-				if rev != head {
+				if rev != resolvedHead {
 					fmt.Fprintf(cmd.OutOrStdout(), "- verification %s %q bound to %s (not %s): STALE, re-run (OBSERVED binding)\n", id, nm, rev, head)
 				}
 			}

@@ -20,7 +20,10 @@ func newRepoCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			abs, _ := filepath.Abs(args[0])
+			abs, err := requireExistingDirectory(args[0])
+			if err != nil {
+				return err
+			}
 			if !git.IsRepo(abs) {
 				return fmt.Errorf("not a git repository: %s", abs)
 			}
@@ -78,6 +81,9 @@ func newRepoCmd() *cobra.Command {
 			}
 			defer db.Close()
 			name := args[0]
+			if err := requireSafeName(name); err != nil {
+				return err
+			}
 			bare := filepath.Join(home, "repositories", name+".git")
 			if _, err := os.Stat(bare); err == nil {
 				return fmt.Errorf("already exists: %s", bare)
@@ -139,7 +145,7 @@ func newRepoCmd() *cobra.Command {
 func newMirrorCmd() *cobra.Command {
 	c := &cobra.Command{Use: "mirror", Short: "Local git mirrors"}
 	c.AddCommand(
-		&cobra.Command{Use: "create --repo ID [--path P]", Short: "Create mirror", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "create --repo ID [--path P]", Short: "Create mirror", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			path, _ := cmd.Flags().GetString("path")
 			db, home, err := openDB()
@@ -168,7 +174,7 @@ func newMirrorCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), id)
 			return nil
 		}},
-		&cobra.Command{Use: "sync --repo ID", Short: "Sync mirror", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "sync --repo ID", Short: "Sync mirror", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			db, _, err := openDB()
 			if err != nil {
@@ -187,7 +193,7 @@ func newMirrorCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), "synced")
 			return nil
 		}},
-		&cobra.Command{Use: "status --repo ID", Short: "Mirror status", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "status --repo ID", Short: "Mirror status", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			db, _, err := openDB()
 			if err != nil {

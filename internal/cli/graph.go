@@ -15,7 +15,7 @@ import (
 func newGraphCmd() *cobra.Command {
 	c := &cobra.Command{Use: "graph", Short: "Code graph"}
 	c.AddCommand(
-		&cobra.Command{Use: "query --repo ID [--symbol S]", Short: "Query graph", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "query --repo ID [--symbol S]", Short: "Query graph", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			sym, _ := cmd.Flags().GetString("symbol")
 			db, _, err := openDB()
@@ -42,7 +42,7 @@ func newGraphCmd() *cobra.Command {
 			}
 			return nil
 		}},
-		&cobra.Command{Use: "impact --repo ID --symbol S", Short: "Impact (callers/references)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "impact --repo ID --symbol S", Short: "Impact (callers/references)", PreRunE: requiredFlags("repo", "symbol"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			sym, _ := cmd.Flags().GetString("symbol")
 			db, _, err := openDB()
@@ -60,7 +60,7 @@ func newGraphCmd() *cobra.Command {
 			}
 			return nil
 		}},
-		&cobra.Command{Use: "health --repo ID", Short: "Graph health", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "health --repo ID", Short: "Graph health", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			db, _, err := openDB()
 			if err != nil {
@@ -85,7 +85,7 @@ func newGraphCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "indexed_revision: %s\nhead: %s\nstatus: %s\nsymbols: %d\nrelations: %d\n", indexedRev, head, stale, nsym, nrel)
 			return nil
 		}},
-		&cobra.Command{Use: "snapshot --repo ID --output F", Short: "Deterministic graph snapshot", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "snapshot --repo ID --output F", Short: "Deterministic graph snapshot", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, _ := cmd.Flags().GetString("repo")
 			out, _ := cmd.Flags().GetString("output")
 			db, _, err := openDB()
@@ -103,12 +103,16 @@ func newGraphCmd() *cobra.Command {
 			}
 			b, _ := json.MarshalIndent(map[string]any{"repo": repoID, "symbols": syms}, "", "  ")
 			if out != "" {
-				return os.WriteFile(out, b, 0o644)
+				resolved, err := requireOutputFile(out)
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(resolved, b, 0o644)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), string(b))
 			return nil
 		}},
-		&cobra.Command{Use: "diff --repo ID [--base B] [--head H]", Short: "Graph diff: added/removed/changed signatures (renames = removed+added)", RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "diff --repo ID [--base B] [--head H]", Short: "Graph diff: added/removed/changed signatures (renames = removed+added)", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 			db, home, err := openDB()
 			if err != nil {
 				return err
@@ -212,6 +216,9 @@ func newWhyCmd() *cobra.Command {
 
 func newInvestigateCmd() *cobra.Command {
 	return &cobra.Command{Use: "investigate QUERY", Args: cobra.ExactArgs(1), Short: "Evidence-backed investigation", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return invalidArgument("query must not be empty")
+		}
 		db, _, err := openDB()
 		if err != nil {
 			return err
@@ -233,7 +240,7 @@ func newInvestigateCmd() *cobra.Command {
 }
 
 func newReviewCmd() *cobra.Command {
-	c := &cobra.Command{Use: "review --repo ID", Short: "Deterministic review checks (analysis, NOT verification)", RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "review --repo ID", Short: "Deterministic review checks (analysis, NOT verification)", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 		repoID, _ := cmd.Flags().GetString("repo")
 		db, _, err := openDB()
 		if err != nil {

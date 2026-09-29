@@ -19,6 +19,9 @@ import (
 func newCodeCmd() *cobra.Command {
 	c := &cobra.Command{Use: "code", Short: "Code search"}
 	c.AddCommand(&cobra.Command{Use: "search QUERY [--repo ID]", Args: cobra.ExactArgs(1), Short: "Search code (respects .gitignore, skips binaries)", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return invalidArgument("query must not be empty")
+		}
 		repoID, _ := cmd.Flags().GetString("repo")
 		db, _, err := openDB()
 		if err != nil {
@@ -85,7 +88,7 @@ func minInt(a, b int) int {
 }
 
 func newIndexCmd() *cobra.Command {
-	c := &cobra.Command{Use: "index --repo ID", Short: "Index code symbols", RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "index --repo ID", Short: "Index code symbols", PreRunE: requiredFlags("repo"), RunE: func(cmd *cobra.Command, args []string) error {
 		repoID, _ := cmd.Flags().GetString("repo")
 		db, _, err := openDB()
 		if err != nil {

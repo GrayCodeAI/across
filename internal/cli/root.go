@@ -16,10 +16,15 @@ const Version = "0.0.1"
 
 func NewRoot() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "across",
-		Short: "Across by GrayCodeAI — Code. Context. Continuity.",
-		Long:  "Git-native engineering context, provenance, checkpoint, and continuity system (Local Alpha).",
+		Use:           "across",
+		Short:         "Across by GrayCodeAI — Code. Context. Continuity.",
+		Long:          "Git-native engineering context, provenance, checkpoint, and continuity system (Local Alpha).",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return invalidArgument("%s", err)
+	})
 	def := config.DefaultHome()
 	root.PersistentFlags().StringVar(&homeDir, "home", def, "Across home directory (or ACROSS_HOME)")
 	AddCommands(root)
@@ -48,12 +53,12 @@ func newAgentHelpCmd() *cobra.Command {
 				"tagline":        "Code. Context. Continuity.",
 				"primary":        "What happened, why, what evidence exists, and how can we continue safely?",
 				"not":            "Across is not a coding agent, IDE, or task orchestrator. It does not replace Git/GitHub/Rover.",
-				"checkpoint":     map[string]any{"immutable": true, "restore": "creates new git worktree, never resets existing checkout"},
+				"checkpoint":     map[string]any{"durable": true, "immutable_enforced": false, "restore": "creates new git worktree, never resets existing checkout"},
 				"evidence":       map[string]any{"rule": "agent claims are STATED, not VERIFIED, unless Across executed with basis executed_by_across_local_runner"},
 				"revision_basis": []string{"checkpoint_revision", "verification_revision", "explicit_user_annotation", "capture_time_head_not_causation", "imported_revision", "unknown", "legacy_revision_basis_unknown"},
 				"epistemic":      []string{"OBSERVED", "STATED", "APPROVED", "INFERRED", "DISPUTED", "SUPERSEDED", "UNKNOWN"},
 				"mutations_cli":  []string{"checkpoint create", "workspace create", "verify run", "change create", "issue create"},
-				"read_mcp":       []string{"across_search", "across_brief", "across_inspect", "across_code_search", "across_graph", "across_graph_health", "across_investigate", "across_why", "across_sessions", "across_checkpoints", "across_verifications", "across_review", "across_issues", "across_changes", "across_workspaces", "across_version_sets", "across_activity"},
+				"read_mcp":       mcpToolNames(),
 				"mcp_hidden":     []string{"shell execution", "merge", "delete", "approve", "grant", "plugin installation"},
 				"runner_warning": "Across local runner executes with user OS permissions; NOT a sandbox. Not exposed via default MCP.",
 				"privacy":        "By default retains messages/tool names/model/tokens; drops raw tool args/results, shell bodies, system prompts, secrets.",
@@ -85,20 +90,10 @@ func newHookCmd() *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			repoPath := args[0]
-			if _, err := os.Stat(repoPath); err != nil {
-				return fmt.Errorf("repo path not found: %s", repoPath)
+			hooksDir, err := repositoryHooksDir(args[0])
+			if err != nil {
+				return err
 			}
-			abs, _ := filepath.Abs(repoPath)
-			common := git.CommonDir(abs)
-			if common == "" {
-				return fmt.Errorf("not a git repository: %s", abs)
-			}
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(abs, common)
-			}
-			// safety: refuse if the resolved hooks dir escapes the repo (symlink §96)
-			hooksDir := filepath.Join(common, "hooks")
 			if err := git.InstallHook(hooksDir, "post-commit", postCommitHookScript(homeDir)); err != nil {
 				return err
 			}
@@ -106,7 +101,38 @@ func newHookCmd() *cobra.Command {
 			return nil
 		},
 	})
+	c.AddCommand(&cobra.Command{
+		Use:   "uninstall REPO_PATH",
+		Args:  cobra.ExactArgs(1),
+		Short: "Remove the Across post-commit hook and restore a chained original",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hooksDir, err := repositoryHooksDir(args[0])
+			if err != nil {
+				return err
+			}
+			if err := git.UninstallHook(hooksDir, "post-commit"); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "post-commit hook uninstalled (chained original restored if present)")
+			return nil
+		},
+	})
 	return c
+}
+
+func repositoryHooksDir(repoPath string) (string, error) {
+	abs, err := requireExistingDirectory(repoPath)
+	if err != nil {
+		return "", err
+	}
+	common := git.CommonDir(abs)
+	if common == "" {
+		return "", invalidArgument("not a git repository: %s", abs)
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(abs, common)
+	}
+	return filepath.Join(common, "hooks"), nil
 }
 
 // postCommitHookScript returns the shell snippet; preserves the intended Across home.
